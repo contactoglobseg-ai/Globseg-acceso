@@ -15,11 +15,14 @@
   // siguen viviendo allá. La URL del proyecto no es secreta: va en el código
   // de cualquier aplicación de Supabase.
   //
-  // SESION_SECRETO tiene que ser **el mismo** que el del Worker de
-  // administración. No porque las sesiones se compartan —no se comparten, cada
-  // dominio tiene su cookie— sino porque con él se salan las huellas de IP que
-  // quedan en las firmas, y con dos secretos distintos la misma IP dejaría dos
-  // huellas y no se podrían comparar entre sistemas.
+  // SESION_SECRETO es **propio de esta aplicación**, no el del Worker de
+  // administración: Cloudflare no deja volver a leer un secreto ya puesto, así
+  // que aquel no se puede copiar aunque se quisiera. Acá se usa para firmar la
+  // cookie de sesión —que de todas formas no sirve en otro dominio— y para
+  // salar la huella de IP que queda en cada firma. Lo único que se pierde al
+  // ser distinto es poder comparar esas huellas entre los dos sistemas, que es
+  // una comparación que nadie ha necesitado; y tener secretos separados es
+  // mejor, porque si uno se filtra el otro no queda expuesto.
   "vars": {
     "SUPABASE_URL": "https://hjoljdjjsobweqbvlijr.supabase.co"
   },

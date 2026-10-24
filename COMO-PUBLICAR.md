@@ -61,20 +61,41 @@ agregar los dos **como Secret** (no como Text):
 | Nombre | Valor |
 |---|---|
 | `SUPABASE_SERVICE_KEY` | La clave **secret** del proyecto de Supabase (empieza con `sb_secret_`) |
-| `SESION_SECRETO` | **Exactamente el mismo** que ya tiene el Worker `globseg-adm` |
+| `SESION_SECRETO` | Uno nuevo, al azar, propio de esta aplicación (ver abajo) |
 
-Tres cosas que importan:
+**La clave de Supabase hay que copiarla con el botón de copiar**, no
+seleccionando el texto que se ve en pantalla: lo que se ve está enmascarado con
+puntitos y esos puntitos se copian, y después el servidor responde «Invalid API
+key». Y tiene que ser la **secret**, no la **publishable**: si se equivoca, la
+aplicación va a decir que la clave no tiene permisos.
 
-- **La clave de Supabase hay que copiarla con el botón de copiar**, no
-  seleccionando el texto que se ve en pantalla: lo que se ve está enmascarado
-  con puntitos y esos puntitos se copian, y después el servidor responde
-  «Invalid API key».
-- Tiene que ser la **secret**, no la **publishable**. Si se equivoca, la
-  aplicación va a decir que la clave no tiene permisos.
-- **`SESION_SECRETO` tiene que ser el mismo del panel.** No es para compartir
-  sesiones —cada dominio tiene la suya— sino porque con él se salan las huellas
-  de IP que quedan en las firmas; con dos secretos distintos la misma conexión
-  dejaría dos huellas distintas y no se podrían comparar entre sistemas.
+### De dónde sale `SESION_SECRETO`
+
+**No se saca de ninguna parte: se inventa uno nuevo.** Cloudflare no deja
+volver a leer un secreto que ya está puesto —solo reemplazarlo—, así que el del
+Worker `globseg-adm` no se puede mirar, y no está anotado en ningún archivo a
+propósito.
+
+Para generarlo y dejarlo en el portapapeles, en la Terminal:
+
+```bash
+node -e "const s=require('crypto').randomBytes(48).toString('base64url');require('child_process').execSync('pbcopy',{input:s});console.log('copiado, '+s.length+' caracteres')"
+```
+
+Después se pega en Cloudflare y **se olvida**: no hay que guardarlo en ningún
+lado. Si alguna vez se pierde, se reemplaza por otro nuevo.
+
+**Que sea distinto al del panel no rompe nada.** Acá ese secreto se usa para
+dos cosas: firmar la cookie de sesión de esta aplicación —que de todas formas
+no sirve en otro dominio— y salar la huella de IP que queda guardada en cada
+firma. Lo único que se pierde es poder comparar esas huellas entre esta
+aplicación y el panel, que es una comparación que nadie ha necesitado. Y tener
+secretos distintos es mejor: si uno se filtra, el otro sistema no queda
+expuesto.
+
+**Si se cambia después de que la gente ya esté usando esto**, se cierran todas
+las sesiones abiertas y hay que volver a entrar. No toca nada de lo ya firmado:
+el hash de un acta es SHA-256 pelado y no depende de este secreto.
 
 `SUPABASE_URL` **no** se pone acá: ya está en `wrangler.jsonc`, y cada
 despliegue borra las variables de texto que se hayan puesto a mano en el panel.
