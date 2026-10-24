@@ -1,0 +1,11 @@
+# Dependencias y estado local de wrangler
+node_modules
+.wrangler
+
+# Lleva la clave de servicio de Supabase para las pruebas locales: no se sube
+.dev.vars
+
+.DS_Store
+
+# Salida de herramientas de análisis que corren sobre la carpeta
+graphify-out

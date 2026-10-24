@@ -1,0 +1,50 @@
+{
+  // Control de acceso en terreno — acceso.seggarridos.com
+  //
+  // Worker aparte del de administración, con la misma base de datos y las
+  // mismas cuentas. Los datos viven en Supabase; SUPABASE_SERVICE_KEY y
+  // SESION_SECRETO son secretos del panel de Cloudflare y nunca van acá.
+  "name": "globseg-acceso",
+  "main": "src/index.js",
+  "compatibility_date": "2025-09-01",
+
+  // Las variables de texto tienen que vivir en este archivo: cada
+  // `wrangler deploy` reemplaza las del panel por las de acá, así que una
+  // puesta a mano en Cloudflare desaparece en el despliegue siguiente. Los
+  // secretos no se tocan, y por eso SUPABASE_SERVICE_KEY y SESION_SECRETO
+  // siguen viviendo allá. La URL del proyecto no es secreta: va en el código
+  // de cualquier aplicación de Supabase.
+  //
+  // SESION_SECRETO tiene que ser **el mismo** que el del Worker de
+  // administración. No porque las sesiones se compartan —no se comparten, cada
+  // dominio tiene su cookie— sino porque con él se salan las huellas de IP que
+  // quedan en las firmas, y con dos secretos distintos la misma IP dejaría dos
+  // huellas y no se podrían comparar entre sistemas.
+  "vars": {
+    "SUPABASE_URL": "https://hjoljdjjsobweqbvlijr.supabase.co"
+  },
+
+  "observability": { "enabled": true },
+
+  // Una vez al día, a las 04:10 UTC (01:10 en Chile en invierno), se le borran
+  // a los accesos de más de un año el RUN, el nombre y la patente. A esa hora
+  // no hay nadie registrando ingresos, así que no compite con el uso real.
+  //
+  // Si este disparador no quedara activo, no se pierde nada ni se rompe nada:
+  // `/api/diagnostico` muestra `accesos_esperando_anonimizacion` y ese número
+  // deja de bajar, y la oficina puede correrlo a mano desde la pantalla.
+  "triggers": {
+    "crons": ["10 4 * * *"]
+  },
+
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+
+    // Sin esto, el servidor de archivos contesta "/" con index.html y el
+    // Worker ni se entera, así que ninguna ruta de la API funcionaría en la
+    // raíz del dominio. Los archivos los sigue entregando él mismo.
+    "run_worker_first": true
+  }
+}

@@ -1,0 +1,407 @@
+/* Control de acceso — la apariencia propia de esta aplicación.
+   -------------------------------------------------------------------------
+   Se carga DESPUÉS de apariencia.css: los tokens de allá son los valores base
+   y acá se usan, no se redefinen.
+
+   Esta pantalla se diseña para un teléfono sostenido con una mano, de noche,
+   a veces con guantes, en la caseta de un parque. De ahí salen casi todas las
+   decisiones de abajo:
+
+     · La navegación va ABAJO, al alcance del pulgar, y no arriba. En un
+       teléfono de 6 pulgadas la franja de arriba es justo donde el pulgar no
+       llega sin acomodar la mano, y acomodar la mano con una linterna en la
+       otra no se hace.
+     · Nada que haya que apretar mide menos de 44px de alto. Es el mínimo que
+       un dedo acierta sin mirar; con guante, el que acierta a la primera.
+     · Los campos van a 16px. Con menos, Safari hace zoom solo al tocarlos y
+       la pantalla salta: el guardia pierde de vista lo que estaba leyendo.
+     · El botón que importa en cada pantalla es grande, verde y está arriba de
+       todo lo demás. No hay que buscarlo.
+
+   A 1024px para arriba —el Mac de la oficina— la navegación sube y las listas
+   se abren en dos columnas. Es la misma página: no hay una versión de
+   escritorio aparte que haya que mantener en paralelo. */
+
+*{box-sizing:border-box}
+
+html{
+  font-size:calc(16px * var(--escala));
+  -webkit-text-size-adjust:100%;
+}
+
+body{
+  margin:0;
+  font-family:var(--cuerpo);
+  background:var(--fondo);
+  color:var(--texto);
+  line-height:1.45;
+  /* El teclado del teléfono tapa media pantalla; sin esto, el contenido del
+     final queda bajo la barra de navegación de abajo y no se alcanza. */
+  padding-bottom:env(safe-area-inset-bottom);
+  overscroll-behavior-y:none;
+}
+
+h1,h2,h3{font-weight:600;letter-spacing:-.01em;margin:0}
+h1{font-size:1.25rem}
+h2{font-size:1.05rem}
+h3{font-size:.95rem}
+p{margin:.4rem 0}
+
+/* ======================================================== el encabezado */
+.barra{
+  position:sticky;top:0;z-index:40;
+  display:flex;align-items:center;gap:.6rem;
+  padding:.55rem .8rem;
+  padding-top:calc(.55rem + env(safe-area-inset-top));
+  background:var(--cromo);
+  -webkit-backdrop-filter:saturate(180%) blur(20px);
+  backdrop-filter:saturate(180%) blur(20px);
+  border-bottom:1px solid transparent;
+  transition:border-color .2s;
+}
+/* La línea de abajo aparece solo al scrollear. Un borde fijo sobre una página
+   que todavía no se movió es una raya que no separa nada. */
+.barra--pegada{border-bottom-color:var(--cromo-borde)}
+
+.escudo{display:flex;align-items:center;gap:.5rem;min-width:0}
+.escudo img{width:30px;height:30px;object-fit:contain;flex:none}
+.escudo b{
+  font-family:var(--marca);font-size:1.15rem;letter-spacing:.02em;
+  text-transform:uppercase;line-height:1;white-space:nowrap;
+}
+.escudo small{display:block;color:var(--texto-2);font-size:.62rem;letter-spacing:.06em;
+  text-transform:uppercase;line-height:1.1}
+
+.barra .crece{flex:1 1 auto;min-width:0}
+
+/* ===================================================== el cuerpo y cajas */
+.hoja{
+  max-width:52rem;margin:0 auto;
+  padding:.8rem .8rem 6.5rem;   /* el hueco de abajo es la barra de pestañas */
+}
+@media (min-width:1024px){
+  .hoja{max-width:68rem;padding-bottom:2rem}
+}
+
+.caja{
+  background:var(--sup);border:1px solid var(--borde-suave);
+  border-radius:var(--r);padding:.85rem;margin-bottom:.7rem;
+}
+.caja--plana{background:transparent;border:0;padding:0}
+
+.titulito{
+  font-size:.7rem;letter-spacing:.07em;text-transform:uppercase;
+  color:var(--texto-3);margin:0 0 .45rem;font-weight:600;
+}
+
+.fila{display:flex;align-items:center;gap:.5rem;flex-wrap:wrap}
+.fila--entre{justify-content:space-between}
+.crece{flex:1 1 auto;min-width:0}
+.gris{color:var(--texto-2)}
+.chico{font-size:.8rem}
+.mono{font-variant-numeric:tabular-nums}
+
+/* ============================================================== botones */
+button{font:inherit;font-family:var(--cuerpo)}
+
+.bt{
+  display:inline-flex;align-items:center;justify-content:center;gap:.4rem;
+  min-height:44px;padding:.55rem 1rem;
+  border-radius:999px;border:1px solid var(--borde);
+  background:var(--sup);color:var(--texto);
+  font-size:.92rem;font-weight:500;cursor:pointer;
+  -webkit-tap-highlight-color:transparent;
+  transition:transform .12s, background .15s, opacity .15s;
+}
+.bt:active{transform:scale(.97)}
+.bt:disabled{opacity:.45;cursor:not-allowed}
+.bt--fuerte{background:var(--btn);border-color:var(--btn);color:var(--btn-texto)}
+.bt--verde{background:var(--verde);border-color:var(--verde);color:#fff}
+.bt--rojo{background:transparent;border-color:var(--rojo);color:var(--rojo)}
+.bt--fantasma{background:transparent;border-color:transparent;color:var(--acento)}
+.bt--ancho{width:100%}
+
+/* El botón de la acción principal de cada pestaña. Grande a propósito: es el
+   que se aprieta con el teléfono en una mano y sin mirar. */
+.bt--grande{min-height:58px;font-size:1.05rem;font-weight:600;border-radius:var(--r)}
+
+.bt--icono{min-width:44px;padding:.4rem .6rem}
+
+/* Segmentos de tema y tamaño de letra, en el cajón de ajustes. */
+.seg{display:inline-flex;background:var(--sup-3);border-radius:999px;padding:3px;gap:2px}
+.seg button{
+  min-height:34px;padding:.2rem .7rem;border:0;border-radius:999px;
+  background:transparent;color:var(--texto-2);font-size:.82rem;cursor:pointer;
+}
+.seg button[aria-pressed="true"]{background:var(--sup);color:var(--texto);box-shadow:var(--sombra)}
+
+/* =============================================================== campos */
+label{display:block;font-size:.78rem;color:var(--texto-2);margin:.6rem 0 .25rem;font-weight:500}
+label:first-child{margin-top:0}
+
+/* Ojo con el selector: `input` a secas se lleva por delante las casillas.
+   `appearance:none` en un type=checkbox le quita el dibujo que pone el
+   sistema, así que la casilla se marca de verdad pero se ve igual de vacía
+   que antes de tocarla. Se descubrió mirando la pantalla, no leyendo el CSS:
+   el estado decía `checked: true` y el recuadro estaba en blanco.
+
+   Donde más caro sale es en «Leí lo que dice este documento», que es la
+   casilla que hay que marcar antes de firmar: sin dibujo, el guardia aprieta
+   Firmar, le sale un error que dice que marque lo que ya marcó, y no tiene
+   cómo saber qué pasa. */
+input:not([type=checkbox]):not([type=radio]),select,textarea{
+  width:100%;
+  /* 16px exactos. Con menos, Safari hace zoom al enfocar el campo. */
+  font-size:16px;font-family:var(--cuerpo);
+  min-height:48px;padding:.6rem .7rem;
+  border:1px solid var(--borde);border-radius:var(--r-s);
+  background:var(--sup);color:var(--texto);
+  -webkit-appearance:none;appearance:none;
+}
+textarea{min-height:110px;resize:vertical;line-height:1.5}
+select{
+  background-image:linear-gradient(45deg,transparent 50%,var(--texto-2) 50%),
+                   linear-gradient(135deg,var(--texto-2) 50%,transparent 50%);
+  background-position:calc(100% - 18px) 50%, calc(100% - 13px) 50%;
+  background-size:5px 5px, 5px 5px;background-repeat:no-repeat;
+  padding-right:2.2rem;
+}
+input:focus,select:focus,textarea:focus{
+  outline:2px solid var(--acento);outline-offset:-1px;border-color:var(--acento);
+}
+
+/* La casilla se deja con el dibujo del sistema y solo se agranda y se le da
+   el color de la marca. 24px porque el dedo tiene que acertarle; el área que
+   se puede tocar es más grande todavía, porque va dentro de un <label> de
+   44px (ver .casilla). */
+input[type=checkbox]{
+  width:24px;height:24px;min-height:24px;flex:none;
+  accent-color:var(--btn);
+}
+
+.dosColumnas{display:grid;grid-template-columns:1fr;gap:0 .7rem}
+@media (min-width:560px){.dosColumnas{grid-template-columns:1fr 1fr}}
+
+.casilla{display:flex;align-items:center;gap:.6rem;min-height:44px;cursor:pointer}
+.casilla input{flex:none}
+.casilla span{font-size:.9rem;color:var(--texto)}
+
+/* ============================================================== avisos */
+.aviso{
+  border-radius:var(--r-s);padding:.55rem .7rem;margin:.5rem 0;
+  font-size:.85rem;line-height:1.4;
+}
+.aviso--ambar{background:var(--ambar-suave);color:var(--ambar)}
+.aviso--rojo{background:var(--rojo-suave);color:var(--rojo)}
+.aviso--verde{background:var(--verde-suave);color:var(--verde)}
+.aviso--gris{background:var(--sup-3);color:var(--texto-2)}
+
+.sello{
+  display:inline-block;padding:.12rem .5rem;border-radius:999px;
+  font-size:.7rem;font-weight:600;white-space:nowrap;
+}
+.sello--verde{background:var(--verde-suave);color:var(--verde)}
+.sello--ambar{background:var(--ambar-suave);color:var(--ambar)}
+.sello--rojo{background:var(--rojo-suave);color:var(--rojo)}
+.sello--gris{background:var(--gris-suave);color:var(--gris)}
+.sello--cian{background:var(--cian-suave);color:var(--cian)}
+
+/* ============================================================== listas */
+.lista{list-style:none;margin:0;padding:0}
+.item{
+  background:var(--sup);border:1px solid var(--borde-suave);
+  border-radius:var(--r);padding:.7rem .8rem;margin-bottom:.5rem;
+}
+.item--adentro{border-left:3px solid var(--verde)}
+.item--anulado{opacity:.55}
+.item b{font-weight:600}
+.item .cuando{font-size:.78rem;color:var(--texto-3);font-variant-numeric:tabular-nums}
+.item .detalle{font-size:.85rem;color:var(--texto-2);margin-top:.15rem}
+
+@media (min-width:1024px){
+  .lista--dos{display:grid;grid-template-columns:1fr 1fr;gap:0 .6rem}
+}
+
+.vacio{
+  text-align:center;color:var(--texto-3);font-size:.9rem;
+  padding:2rem 1rem;border:1px dashed var(--borde);border-radius:var(--r);
+}
+
+/* =================================================== barra de pestañas */
+/* Abajo en el teléfono (pulgar), arriba en el escritorio (ahí hay mouse y la
+   mano no se cansa). Es la misma barra: cambia de lugar, no de contenido. */
+.pestanas{
+  position:fixed;left:0;right:0;bottom:0;z-index:50;
+  display:flex;
+  background:var(--cromo);
+  -webkit-backdrop-filter:saturate(180%) blur(20px);
+  backdrop-filter:saturate(180%) blur(20px);
+  border-top:1px solid var(--cromo-borde);
+  padding-bottom:env(safe-area-inset-bottom);
+}
+.pestanas button{
+  flex:1;min-height:56px;padding:.35rem .2rem;
+  border:0;background:transparent;color:var(--texto-3);
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;
+  font-size:.68rem;cursor:pointer;-webkit-tap-highlight-color:transparent;
+}
+.pestanas button svg{width:22px;height:22px;flex:none}
+.pestanas button[aria-current="page"]{color:var(--acento)}
+.pestanas .globo{
+  position:absolute;top:6px;margin-left:16px;
+  min-width:17px;height:17px;padding:0 4px;border-radius:999px;
+  background:var(--verde);color:#fff;font-size:.62rem;font-weight:700;
+  display:flex;align-items:center;justify-content:center;
+}
+
+@media (min-width:1024px){
+  .pestanas{
+    position:sticky;top:3.1rem;bottom:auto;
+    border-top:0;border-bottom:1px solid var(--cromo-borde);
+    max-width:68rem;margin:0 auto;padding:0 .8rem;
+  }
+  .pestanas button{
+    flex:0 0 auto;min-height:46px;flex-direction:row;gap:.4rem;
+    font-size:.88rem;padding:0 .9rem;
+  }
+  .pestanas button[aria-current="page"]{box-shadow:inset 0 -2px 0 var(--acento)}
+  .pestanas .globo{position:static;margin:0}
+}
+
+/* ================================================ el cajón de abajo (hoja) */
+/* Los formularios largos —registrar un ingreso, informar un evento— se abren
+   en una hoja que sube desde abajo en vez de llevar a otra pantalla. Así lo
+   que se estaba mirando sigue ahí detrás, y cerrar es un gesto y no un botón
+   «volver» que hay que encontrar. */
+.fondo{
+  position:fixed;inset:0;z-index:60;
+  background:rgba(0,0,0,.4);
+  opacity:0;pointer-events:none;transition:opacity .25s;
+}
+.fondo[data-abierto]{opacity:1;pointer-events:auto}
+
+.hojaSube{
+  position:fixed;left:0;right:0;bottom:0;z-index:61;
+  max-height:92vh;overflow-y:auto;overscroll-behavior:contain;
+  background:var(--sup);
+  border-radius:var(--r) var(--r) 0 0;
+  border-top:1px solid var(--borde-suave);
+  box-shadow:var(--sombra-alta);
+  padding:.5rem 1rem calc(1.4rem + env(safe-area-inset-bottom));
+  transform:translateY(100%);
+  transition:transform .32s cubic-bezier(.32,.72,0,1);
+}
+.hojaSube[data-abierto]{transform:translateY(0)}
+.tirador{
+  width:36px;height:4px;border-radius:999px;background:var(--borde);
+  margin:.4rem auto .8rem;
+}
+.hojaSube h2{position:sticky;top:0;background:var(--sup);padding:.2rem 0 .6rem;z-index:1}
+
+@media (min-width:720px){
+  .hojaSube{
+    left:50%;right:auto;bottom:auto;top:50%;
+    width:min(38rem,92vw);
+    transform:translate(-50%,-50%) scale(.96);
+    border-radius:var(--r);border:1px solid var(--borde-suave);
+    max-height:88vh;opacity:0;
+  }
+  .hojaSube[data-abierto]{transform:translate(-50%,-50%) scale(1);opacity:1}
+  .tirador{display:none}
+}
+
+.pie-hoja{
+  position:sticky;bottom:0;background:var(--sup);
+  padding:.7rem 0 .2rem;margin-top:.8rem;
+  border-top:1px solid var(--borde-suave);
+  display:flex;gap:.5rem;
+}
+.pie-hoja .bt{flex:1}
+
+/* En un acta el pie NO se pega.
+   Un formulario se llena de arriba abajo y el botón de guardar pegado abajo
+   ayuda. Un acta no: se lee, se firma y recién al final se cierra, así que un
+   pie pegado queda flotando justo encima del recuadro de la firma, y el
+   guardia puede tocar «Cerrar» creyendo que está firmando. Acá el pie va al
+   final, después del botón de firmar, que es el orden en que se usa. */
+.pie-hoja--quieto{position:static}
+
+/* ========================================================= el escáner */
+.escaner{
+  position:relative;width:100%;aspect-ratio:4/3;max-height:45vh;
+  background:#000;border-radius:var(--r);overflow:hidden;margin-bottom:.6rem;
+}
+.escaner video{width:100%;height:100%;object-fit:cover;display:block}
+/* El recuadro que dice dónde poner la cédula. Sin esto la gente apunta a
+   cualquier parte y cree que el lector no sirve. */
+.mira{
+  position:absolute;inset:18% 14%;
+  border:2px solid rgba(255,255,255,.9);border-radius:10px;
+  box-shadow:0 0 0 100vmax rgba(0,0,0,.35);
+}
+.escaner .pista{
+  position:absolute;left:0;right:0;bottom:.5rem;text-align:center;
+  color:#fff;font-size:.8rem;text-shadow:0 1px 3px rgba(0,0,0,.8);
+}
+
+/* ============================================================ la firma */
+.lienzo{
+  width:100%;height:190px;
+  border:1px dashed var(--borde);border-radius:var(--r-s);
+  background:var(--sup-2);color:var(--texto);
+  touch-action:none;display:block;
+}
+.actaTexto{
+  white-space:pre-wrap;font-size:.84rem;line-height:1.55;
+  background:var(--sup-2);border:1px solid var(--borde-suave);
+  border-radius:var(--r-s);padding:.8rem;
+  max-height:48vh;overflow-y:auto;overscroll-behavior:contain;
+  font-family:var(--cuerpo);
+}
+.firmaHecha{
+  max-width:200px;max-height:70px;object-fit:contain;
+  /* Se guarda en negro; en modo oscuro se invierte para que se vea. */
+  background:#fff;border-radius:var(--r-xs);padding:4px;
+}
+
+/* ============================================================== recado */
+/* El mensaje que confirma lo que acaba de pasar. Va arriba y no abajo: abajo
+   está la barra de pestañas y el pulgar, y lo taparía la mano. */
+.recado{
+  position:fixed;left:50%;transform:translateX(-50%) translateY(-160%);
+  top:calc(.6rem + env(safe-area-inset-top));z-index:90;
+  max-width:min(30rem,92vw);
+  background:var(--texto);color:var(--fondo);
+  padding:.6rem .9rem;border-radius:999px;
+  font-size:.88rem;box-shadow:var(--sombra-alta);
+  transition:transform .3s cubic-bezier(.32,.72,0,1);
+}
+.recado[data-visible]{transform:translateX(-50%) translateY(0)}
+.recado--malo{background:var(--rojo);color:#fff}
+
+/* ============================================================== ingreso */
+.ingreso{
+  min-height:100dvh;display:flex;align-items:center;justify-content:center;
+  padding:1.2rem;
+}
+.ingreso .caja{width:100%;max-width:23rem}
+.ingreso .escudo{justify-content:center;margin-bottom:1rem;flex-direction:column;text-align:center}
+.ingreso .escudo img{width:58px;height:58px}
+
+/* ================================================= respeto por el sistema */
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{
+    animation-duration:.01ms !important;transition-duration:.01ms !important;
+  }
+}
+@media (prefers-reduced-transparency:reduce){
+  .barra,.pestanas{backdrop-filter:none;-webkit-backdrop-filter:none;background:var(--sup)}
+}
+@media (prefers-contrast:more){
+  .caja,.item{border-color:var(--borde)}
+  .bt{border-color:var(--texto-2)}
+}
+
+/* Lo que se oculta sin sacarlo del documento. */
+[hidden]{display:none !important}
+.soloLectura{display:none}

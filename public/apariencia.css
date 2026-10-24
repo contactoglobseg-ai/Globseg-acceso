@@ -1,0 +1,114 @@
+/* Apariencia compartida por el panel y el libro de asistencia.
+   ------------------------------------------------------------------------
+   Estos tokens estaban copiados tal cual en index.html y en asistencia.html.
+   Las dos páginas son la misma herramienta y tienen que envejecer parejas:
+   tenerlos en dos lugares significaba que un color corregido en una quedaba
+   viejo en la otra, sin que nadie se enterara hasta verlas lado a lado.
+
+   Va como archivo aparte y no inline porque las dos CSP ya permiten
+   `style-src 'self'` — incluida la del libro de asistencia, que a propósito
+   no deja cargar nada de fuera del dominio.
+
+   Se carga ANTES del <style> propio de cada página: lo de abajo son los
+   valores base, y cada página los usa y agrega lo suyo encima.
+
+   Lo que NO está acá: el script del <head> que aplica el tema antes del
+   primer pintado. Ese sigue inline en las dos páginas a propósito; un
+   archivo aparte se baja después y devuelve el destello blanco que ese
+   script existe para evitar. */
+
+/* Pantalla de trabajo: se opera, no se lee. Superficies limpias, jerarquía por
+   peso y espacio antes que por color, y el color reservado para el estado.
+   Dos temas y cuatro tamaños de letra, porque esto se mira todo el día.
+
+   La tipografía es la del sistema: en los Mac de la oficina eso es San
+   Francisco, la misma que usan las aplicaciones de Apple. La condensada de la
+   marca queda solo en el escudo del encabezado, que es donde identifica. */
+:root{
+  --marca:"Big Shoulders Display","Arial Narrow",sans-serif;
+  --cuerpo:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",system-ui,
+           "Helvetica Neue",Arial,sans-serif;
+  --display:var(--cuerpo);
+
+  /* Tamaño de letra: lo elige cada quien desde el encabezado. */
+  --escala:1;
+
+  /* Forma */
+  --r:12px; --r-s:9px; --r-xs:6px;
+  --sombra:0 1px 2px rgba(0,0,0,.05), 0 6px 20px rgba(0,0,0,.05);
+  --sombra-alta:0 2px 6px rgba(0,0,0,.08), 0 16px 48px rgba(0,0,0,.10);
+
+  /* Claro */
+  --fondo:#F5F5F7;
+  --sup:#FFFFFF; --sup-2:#F7F7F9; --sup-3:#EFEFF2;
+  --borde:#D9D9DF; --borde-suave:#E9E9ED;
+  --texto:#1D1D1F; --texto-2:#6E6E73; --texto-3:#8E8E93;
+  --cromo:rgba(255,255,255,.72); --cromo-borde:#DDDDE2;
+  --acento:#0071A8; --acento-fuerte:#005682; --acento-suave:#E2F0F9;
+  --btn:#0071A8; --btn-alta:#005682; --btn-texto:#FFFFFF;
+  --verde:#1E8E52;  --verde-suave:#E0F3E8;    /* facturado / pagado */
+  --ambar:#9C5D00;  --ambar-suave:#FBEEDC;    /* solicitar OC */
+  --cian:#0071A8;   --cian-suave:#E2F0F9;     /* pendiente de facturación */
+  --gris:#6E6E73;   --gris-suave:#ECECEF;     /* en curso */
+  --rojo:#C0362C;   --rojo-suave:#FBE8E6;
+  --violeta:#5B3BB8; --violeta-suave:#EDE8FB; /* factorizado */
+  color-scheme:light;
+}
+
+/* Oscuro. Negro real de fondo y superficies que suben por capas, como en las
+   aplicaciones de Apple: la profundidad la da el gris, no la sombra. */
+:root[data-tema="oscuro"]{
+  --fondo:#000000;
+  --sup:#1C1C1E; --sup-2:#2C2C2E; --sup-3:#3A3A3C;
+  --borde:#38383A; --borde-suave:#2C2C2E;
+  --texto:#F5F5F7; --texto-2:#A1A1A6; --texto-3:#8E8E93;
+  --cromo:rgba(28,28,30,.72); --cromo-borde:#2C2C2E;
+  --acento:#64D2FF; --acento-fuerte:#9BE2FF; --acento-suave:rgba(100,210,255,.16);
+  --btn:#0A84FF; --btn-alta:#3D9BFF; --btn-texto:#FFFFFF;
+  --verde:#30D158;  --verde-suave:rgba(48,209,88,.18);
+  --ambar:#FF9F0A;  --ambar-suave:rgba(255,159,10,.18);
+  --cian:#64D2FF;   --cian-suave:rgba(100,210,255,.16);
+  --gris:#98989D;   --gris-suave:rgba(152,152,157,.18);
+  --rojo:#FF453A;   --rojo-suave:rgba(255,69,58,.18);
+  --violeta:#BF9BFF; --violeta-suave:rgba(191,155,255,.18);
+  --sombra:0 1px 2px rgba(0,0,0,.5);
+  --sombra-alta:0 8px 36px rgba(0,0,0,.6);
+  color-scheme:dark;
+}
+
+/* Sin elección guardada se sigue al sistema, como corresponde. */
+@media (prefers-color-scheme: dark){
+  :root:not([data-tema="claro"]){
+    --fondo:#000000;
+    --sup:#1C1C1E; --sup-2:#2C2C2E; --sup-3:#3A3A3C;
+    --borde:#38383A; --borde-suave:#2C2C2E;
+    --texto:#F5F5F7; --texto-2:#A1A1A6; --texto-3:#8E8E93;
+    --cromo:rgba(28,28,30,.72); --cromo-borde:#2C2C2E;
+    --acento:#64D2FF; --acento-fuerte:#9BE2FF; --acento-suave:rgba(100,210,255,.16);
+    --btn:#0A84FF; --btn-alta:#3D9BFF; --btn-texto:#FFFFFF;
+    --verde:#30D158;  --verde-suave:rgba(48,209,88,.18);
+    --ambar:#FF9F0A;  --ambar-suave:rgba(255,159,10,.18);
+    --cian:#64D2FF;   --cian-suave:rgba(100,210,255,.16);
+    --gris:#98989D;   --gris-suave:rgba(152,152,157,.18);
+    --rojo:#FF453A;   --rojo-suave:rgba(255,69,58,.18);
+    --violeta:#BF9BFF; --violeta-suave:rgba(191,155,255,.18);
+    --sombra:0 1px 2px rgba(0,0,0,.5);
+    --sombra-alta:0 8px 36px rgba(0,0,0,.6);
+    color-scheme:dark;
+  }
+}
+*,*::before,*::after{box-sizing:border-box}
+[hidden]{display:none!important}
+/* Todo el texto va en rem, así que mover esta base mueve la página entera. */
+html{font-size:calc(16px * var(--escala))}
+html,body{margin:0;height:100%}
+body{background:var(--fondo);color:var(--texto);
+  font:400 .9375rem/1.55 var(--cuerpo);
+  -webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale}
+::selection{background:var(--acento-suave);color:var(--texto)}
+:where(a,button,input,select,textarea):focus-visible{
+  outline:2px solid var(--acento);outline-offset:2px}
+h1,h2,h3{margin:0;font-family:var(--display);font-weight:600;
+  letter-spacing:-.012em;line-height:1.2}
+p{margin:0}
+.num{font-variant-numeric:tabular-nums}

@@ -1,0 +1,1511 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Control de acceso · Seguridad Garridos</title>
+<meta name="robots" content="noindex, nofollow">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F5F5F7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<link rel="icon" href="logo.png">
+<link rel="apple-touch-icon" href="logo.png">
+
+<!-- El tema, ANTES del primer pintado.
+     Va inline y duplicado respecto de apariencia.js a propósito: un archivo
+     aparte se baja después del primer pintado y devuelve el destello blanco
+     que este script existe para evitar. Quien usa el modo oscuro lo nota en
+     cada carga, y esta pantalla se abre muchas veces por turno.
+     Todo en try/catch: en una ventana privada localStorage lanza, y una
+     preferencia de apariencia no puede dejar la página en blanco. -->
+<script>
+(function(){
+  try{
+    var t = localStorage.getItem("acceso.tema");
+    if (t && t !== "auto") document.documentElement.setAttribute("data-tema", t);
+    var e = localStorage.getItem("acceso.escala");
+    if (e) document.documentElement.style.setProperty("--escala", e);
+  }catch(_){}
+})();
+</script>
+
+<link rel="stylesheet" href="apariencia.css">
+<link rel="stylesheet" href="acceso.css">
+</head>
+<body>
+
+<div id="app"></div>
+<div class="recado" id="recado" role="status" aria-live="polite"></div>
+
+<script src="apariencia.js"></script>
+<script src="firma.js"></script>
+<script>
+"use strict";
+/* =============================================================================
+ * Control de acceso en terreno — acceso.seggarridos.com
+ *
+ * Todo vive en este único <script>, igual que en las otras páginas del
+ * sistema, y por el mismo motivo: los <script> clásicos comparten el ámbito
+ * global, así que un `const` repetido entre este archivo y apariencia.js,
+ * firma.js o jsqr.js da «Identifier has already been declared» y deja la
+ * página **en blanco**, no a medias. Los nombres de acá empiezan con algo
+ * propio para que eso no pase.
+ *
+ * Nombres que NO se pueden usar acá porque ya existen:
+ *   apariencia.js → ESCALAS, recordar, recordado, marcarSegmento,
+ *                   aplicarTema, aplicarEscala, conectarApariencia
+ *   firma.js      → Firma
+ *   jsqr.js       → jsQR
+ * ========================================================================== */
+
+// ------------------------------------------------------------------ ayudas
+const $ = (s, raiz) => (raiz || document).querySelector(s);
+
+/** Escapa para meter texto dentro de HTML. Se usa en TODO lo que viene de la
+ *  base: un nombre con un < adentro no puede abrir una etiqueta. */
+function esc(v) {
+  return String(v == null ? "" : v)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+
+/** Llama a la API. Devuelve los datos o lanza con el mensaje del servidor. */
+async function pedir(ruta, opciones) {
+  const op = Object.assign({ headers: {} }, opciones || {});
+  if (op.cuerpo !== undefined) {
+    op.method = op.method || "POST";
+    op.headers["content-type"] = "application/json";
+    op.body = JSON.stringify(op.cuerpo);
+    delete op.cuerpo;
+  }
+  let r;
+  try {
+    r = await fetch("/api" + ruta, op);
+  } catch (_) {
+    // Esto es lo normal en un parque: se cayó la señal a mitad de la petición.
+    throw new Error("No hay conexión. Lo que escribió no se perdió: vuelva a intentar.");
+  }
+  let datos = null;
+  try { datos = await r.json(); } catch (_) { /* respuesta sin cuerpo */ }
+  if (!r.ok) {
+    if (r.status === 401) { ESTADO.usuario = null; pintar(); }
+    throw new Error((datos && datos.error) || ("El servidor respondió " + r.status));
+  }
+  return datos;
+}
+
+let recadoTimer = null;
+/** El mensajito de arriba. `malo` lo pinta en rojo y lo deja más rato. */
+function recado(texto, malo) {
+  const caja = $("#recado");
+  caja.textContent = texto;
+  caja.classList.toggle("recado--malo", !!malo);
+  caja.setAttribute("data-visible", "");
+  clearTimeout(recadoTimer);
+  recadoTimer = setTimeout(() => caja.removeAttribute("data-visible"), malo ? 6000 : 3000);
+}
+
+const fechaHoy = () => {
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+};
+const horaAhora = () => {
+  const d = new Date();
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+};
+
+/** La hora de un instante, en hora local del teléfono. */
+const hora = (iso) => {
+  if (!iso) return "";
+  const d = new Date(iso);
+  return isNaN(d) ? "" : d.toLocaleTimeString("es-CL", { hour: "2-digit", minute: "2-digit", hour12: false });
+};
+const fechaHora = (iso) => {
+  if (!iso) return "";
+  const d = new Date(iso);
+  return isNaN(d) ? "" : d.toLocaleString("es-CL",
+    { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit", hour12: false });
+};
+
+/** 123456789 -> 12.345.678-9. Igual que formatearRut del servidor. */
+function rutLindo(v) {
+  const t = String(v == null ? "" : v).toUpperCase().replace(/[^0-9K]/g, "");
+  if (t.length < 2) return String(v || "");
+  return t.slice(0, -1).replace(/\B(?=(\d{3})+(?!\d))/g, ".") + "-" + t.slice(-1);
+}
+
+/** La ubicación, si el teléfono la da pronto. Nunca detiene nada.
+ *  Un turno no se pierde por un permiso del teléfono: si la niega o el parque
+ *  no tiene señal de GPS, lo que se registra queda igual, sin coordenadas. */
+let ubicacionCache = null;
+function ubicacion() {
+  if (ubicacionCache && Date.now() - ubicacionCache.t < 120000) {
+    return Promise.resolve(ubicacionCache.v);
+  }
+  return new Promise((listo) => {
+    if (!navigator.geolocation) return listo({});
+    const corta = setTimeout(() => listo({}), 4000);
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        clearTimeout(corta);
+        const v = { lat: pos.coords.latitude, lon: pos.coords.longitude };
+        ubicacionCache = { t: Date.now(), v };
+        listo(v);
+      },
+      () => { clearTimeout(corta); listo({}); },
+      { enableHighAccuracy: false, timeout: 4000, maximumAge: 120000 });
+  });
+}
+
+/** Deshabilita un botón mientras corre algo, y lo devuelve pase lo que pase. */
+async function ocupado(boton, tarea) {
+  if (!boton) return tarea();
+  const antes = boton.textContent;
+  boton.disabled = true;
+  boton.textContent = "Un momento…";
+  try { return await tarea(); }
+  finally { boton.disabled = false; boton.textContent = antes; }
+}
+
+// ------------------------------------------------------------------ estado
+const ESTADO = {
+  usuario: null,
+  instalaciones: [],
+  instalacion: null,      // la elegida, se recuerda en el teléfono
+  vista: "accesos",
+  categorias: {},
+  tiposEvento: [],
+  diasRetencion: 365,
+  datos: {},              // lo último que trajo cada vista
+};
+
+const guardarLocal = (k, v) => { try { localStorage.setItem("acceso." + k, v); } catch (_) {} };
+const leerLocal = (k) => { try { return localStorage.getItem("acceso." + k); } catch (_) { return null; } };
+
+// ============================================================== la portada
+const ICONOS = {
+  accesos: '<path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4M10 17l5-5-5-5M15 12H3"/>',
+  novedades: '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2zM9 7h7M9 11h7"/>',
+  turno: '<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM23 11h-6M20 8l3 3-3 3"/>',
+  eventos: '<path d="M10.3 3.2 1.8 17.5A2 2 0 0 0 3.5 20.5h17a2 2 0 0 0 1.7-3L13.7 3.2a2 2 0 0 0-3.4 0zM12 9v4M12 17h.01"/>',
+};
+const ROTULO = { accesos: "Accesos", novedades: "Novedades", turno: "Turno", eventos: "Eventos" };
+
+function icono(nombre) {
+  return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+    stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONOS[nombre]}</svg>`;
+}
+
+// ============================================================== ingreso
+function pintarIngreso(aviso) {
+  $("#app").innerHTML = `
+    <div class="ingreso">
+      <form class="caja" id="f-entrar">
+        <div class="escudo">
+          <img src="logo.png" alt="">
+          <div><b>Control de acceso</b><small>Seguridad Garridos</small></div>
+        </div>
+        ${aviso ? `<div class="aviso aviso--rojo">${esc(aviso)}</div>` : ""}
+        <label for="e-usuario">Usuario</label>
+        <input id="e-usuario" name="usuario" autocomplete="username"
+               autocapitalize="none" autocorrect="off" spellcheck="false" required>
+        <label for="e-clave">Contraseña</label>
+        <input id="e-clave" name="clave" type="password" autocomplete="current-password" required>
+        <div style="margin-top:1rem">
+          <button class="bt bt--fuerte bt--ancho" type="submit">Entrar</button>
+        </div>
+        <p class="chico gris" style="margin-top:.9rem">
+          Entre con la misma cuenta con que marca su turno. Si es de la oficina,
+          con la del panel.
+        </p>
+      </form>
+    </div>`;
+
+  $("#f-entrar").onsubmit = async (ev) => {
+    ev.preventDefault();
+    const boton = $("#f-entrar button[type=submit]");
+    await ocupado(boton, async () => {
+      try {
+        const r = await pedir("/sesion", {
+          cuerpo: { usuario: $("#e-usuario").value, clave: $("#e-clave").value },
+        });
+        ESTADO.usuario = r.usuario;
+        await arrancarSesion();
+      } catch (e) {
+        pintarIngreso(e.message);
+      }
+    });
+  };
+  $("#e-usuario").focus();
+}
+
+// ============================================================== el marco
+function pintarMarco() {
+  const u = ESTADO.usuario;
+  $("#app").innerHTML = `
+    <header class="barra" id="barra">
+      <div class="escudo">
+        <img src="logo.png" alt="">
+        <div><b>Acceso</b><small id="rotulo-inst">—</small></div>
+      </div>
+      <div class="crece"></div>
+      <button class="bt bt--icono bt--fantasma" id="b-ajustes" aria-label="Ajustes">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+          stroke-linecap="round" aria-hidden="true" style="width:22px;height:22px">
+          <circle cx="12" cy="12" r="3"/>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+        </svg>
+      </button>
+    </header>
+
+    <nav class="pestanas" id="pestanas" aria-label="Secciones">
+      ${["accesos", "novedades", "turno", "eventos"].map((v) => `
+        <button data-vista="${v}" ${v === ESTADO.vista ? 'aria-current="page"' : ""}>
+          ${icono(v)}<span>${ROTULO[v]}</span>
+          ${v === "accesos" ? '<span class="globo" id="globo-adentro" hidden></span>' : ""}
+        </button>`).join("")}
+    </nav>
+
+    <main class="hoja" id="hoja"></main>
+
+    <div class="fondo" id="fondo"></div>
+    <section class="hojaSube" id="cajon" role="dialog" aria-modal="true" aria-labelledby="cajon-titulo"></section>`;
+
+  $("#pestanas").onclick = (ev) => {
+    const b = ev.target.closest("button[data-vista]");
+    if (!b) return;
+    ESTADO.vista = b.dataset.vista;
+    guardarLocal("vista", ESTADO.vista);
+    pintar();
+  };
+
+  $("#b-ajustes").onclick = abrirAjustes;
+  $("#fondo").onclick = cerrarCajon;
+
+  // La línea bajo el encabezado solo cuando la página se movió.
+  const alScroll = () => $("#barra").classList.toggle("barra--pegada", window.scrollY > 4);
+  window.addEventListener("scroll", alScroll, { passive: true });
+  alScroll();
+
+  // Esc cierra el cajón, como en cualquier diálogo.
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape" && $("#cajon").hasAttribute("data-abierto")) cerrarCajon();
+  });
+}
+
+function marcarPestana() {
+  for (const b of document.querySelectorAll("#pestanas button[data-vista]")) {
+    if (b.dataset.vista === ESTADO.vista) b.setAttribute("aria-current", "page");
+    else b.removeAttribute("aria-current");
+  }
+}
+
+// ======================================================== la instalación
+/** El selector de instalación. Va en cada vista porque todo lo que se
+ *  registra pertenece a una, y porque un guardia de relevo trabaja hoy en un
+ *  parque distinto al de ayer: fijarlo a la ficha lo dejaría sin poder
+ *  registrar nada, que es la falla que termina en una hoja de papel. */
+function selectorInstalacion() {
+  return `
+    <div class="caja">
+      <label for="s-inst" class="titulito" style="margin-bottom:.35rem">Instalación</label>
+      <select id="s-inst">
+        <option value="">— elija dónde está —</option>
+        ${ESTADO.instalaciones.map((i) => `
+          <option value="${i.id}" ${String(i.id) === String(ESTADO.instalacion) ? "selected" : ""}>
+            ${esc(i.nombre)}${i.comuna ? " · " + esc(i.comuna) : ""}
+          </option>`).join("")}
+      </select>
+    </div>`;
+}
+
+function conectarSelectorInstalacion() {
+  const s = $("#s-inst");
+  if (!s) return;
+  s.onchange = () => {
+    ESTADO.instalacion = s.value || null;
+    guardarLocal("instalacion", ESTADO.instalacion || "");
+    pintar();
+  };
+  const inst = ESTADO.instalaciones.find((i) => String(i.id) === String(ESTADO.instalacion));
+  const rot = $("#rotulo-inst");
+  if (rot) rot.textContent = inst ? inst.nombre : "Sin instalación";
+}
+
+const sinInstalacion = () =>
+  `<div class="vacio">Elija arriba en qué instalación está para poder registrar.</div>`;
+
+// ============================================================== el cajón
+let alCerrarCajon = null;
+
+function abrirCajon(titulo, contenido, alAbrir) {
+  const cajon = $("#cajon");
+  cajon.innerHTML = `
+    <div class="tirador"></div>
+    <h2 id="cajon-titulo">${esc(titulo)}</h2>
+    ${contenido}`;
+  cajon.setAttribute("data-abierto", "");
+  $("#fondo").setAttribute("data-abierto", "");
+  document.body.style.overflow = "hidden";
+  if (alAbrir) alAbrir(cajon);
+}
+
+function cerrarCajon() {
+  $("#cajon").removeAttribute("data-abierto");
+  $("#fondo").removeAttribute("data-abierto");
+  document.body.style.overflow = "";
+  if (alCerrarCajon) { const f = alCerrarCajon; alCerrarCajon = null; f(); }
+}
+
+// ============================================================== ajustes
+function abrirAjustes() {
+  const u = ESTADO.usuario;
+  abrirCajon("Ajustes", `
+    <div class="caja caja--plana">
+      <p class="titulito">Su cuenta</p>
+      <p style="margin:0"><b>${esc(u.nombre)}</b></p>
+      <p class="chico gris" style="margin:.1rem 0 0">
+        ${esc(u.usuario)} · ${u.tipo === "guardia" ? "Guardia" : "Oficina"}${u.cargo ? " · " + esc(u.cargo) : ""}
+      </p>
+    </div>
+
+    <div class="caja caja--plana" style="margin-top:1rem">
+      <p class="titulito">Apariencia</p>
+      <div class="fila fila--entre" style="margin-bottom:.6rem">
+        <span class="chico">Tema</span>
+        <div class="seg" id="seg-tema">
+          <button data-tema="claro">Claro</button>
+          <button data-tema="oscuro">Oscuro</button>
+          <button data-tema="auto">Auto</button>
+        </div>
+      </div>
+      <div class="fila fila--entre">
+        <span class="chico">Tamaño de letra</span>
+        <div class="seg" id="seg-letra">
+          <button data-escala="0.875">A</button>
+          <button data-escala="1">A</button>
+          <button data-escala="1.125">A</button>
+          <button data-escala="1.25">A</button>
+        </div>
+      </div>
+    </div>
+
+    ${u.tipo === "oficina" ? `
+      <div class="caja caja--plana" style="margin-top:1rem">
+        <p class="titulito">Datos de visitantes</p>
+        <p class="chico gris" style="margin:0 0 .5rem">
+          Al año se les borra solo el RUN, el nombre y la patente a los accesos
+          viejos, y queda el registro de que hubo movimiento. Corre todas las
+          noches; este botón lo hace ahora.
+        </p>
+        <button class="bt" id="b-anonimizar">Borrar ahora los de más de ${ESTADO.diasRetencion} días</button>
+      </div>` : ""}
+
+    <div class="pie-hoja">
+      <button class="bt" id="b-cerrar-ajustes">Cerrar</button>
+      <button class="bt bt--rojo" id="b-salir">Cerrar sesión</button>
+    </div>
+  `, () => {
+    // apariencia.js lee el tema de localStorage con SU prefijo. Acá se guarda
+    // con el de esta aplicación («acceso.tema»), que es el que lee el script
+    // del <head>. Por eso se conecta a mano en vez de llamar a
+    // conectarApariencia(): son dos llaves distintas en el mismo navegador, y
+    // mezclarlas haría que el tema elegido no sobreviviera a la recarga.
+    conectarAparienciaPropia();
+
+    $("#b-cerrar-ajustes").onclick = cerrarCajon;
+    $("#b-salir").onclick = async () => {
+      await pedir("/sesion", { method: "DELETE" }).catch(() => {});
+      ESTADO.usuario = null;
+      cerrarCajon();
+      pintarIngreso();
+    };
+    const an = $("#b-anonimizar");
+    if (an) an.onclick = () => ocupado(an, async () => {
+      try {
+        const r = await pedir("/mantenimiento/anonimizar", { cuerpo: {} });
+        recado(r.anonimizados
+          ? `Listo: ${r.anonimizados} registro${r.anonimizados === 1 ? "" : "s"} sin datos personales.`
+          : "No había ninguno vencido.");
+      } catch (e) { recado(e.message, true); }
+    });
+  });
+}
+
+/** Tema y tamaño de letra, con las llaves de esta aplicación. */
+function conectarAparienciaPropia() {
+  const temaActual = leerLocal("tema") || "auto";
+  const escalaActual = leerLocal("escala") || "1";
+
+  const pintarSeg = (sel, campo, valor) => {
+    const caja = $(sel);
+    if (!caja) return;
+    for (const b of caja.querySelectorAll("button")) {
+      b.setAttribute("aria-pressed", b.dataset[campo] === valor ? "true" : "false");
+    }
+  };
+  pintarSeg("#seg-tema", "tema", temaActual);
+  pintarSeg("#seg-letra", "escala", escalaActual);
+
+  const seg = $("#seg-tema");
+  if (seg) seg.onclick = (ev) => {
+    const b = ev.target.closest("button");
+    if (!b) return;
+    const t = b.dataset.tema;
+    guardarLocal("tema", t);
+    if (t === "auto") document.documentElement.removeAttribute("data-tema");
+    else document.documentElement.setAttribute("data-tema", t);
+    pintarSeg("#seg-tema", "tema", t);
+  };
+
+  const letra = $("#seg-letra");
+  if (letra) letra.onclick = (ev) => {
+    const b = ev.target.closest("button");
+    if (!b) return;
+    guardarLocal("escala", b.dataset.escala);
+    document.documentElement.style.setProperty("--escala", b.dataset.escala);
+    pintarSeg("#seg-letra", "escala", b.dataset.escala);
+  };
+}
+
+// ========================================================== vista: accesos
+async function vistaAccesos() {
+  const hoja = $("#hoja");
+  hoja.innerHTML = selectorInstalacion() +
+    (ESTADO.instalacion
+      ? `<button class="bt bt--verde bt--grande bt--ancho" id="b-ingreso">+ Registrar ingreso</button>
+         <div id="zona-adentro"><div class="vacio">Cargando…</div></div>`
+      : sinInstalacion());
+  conectarSelectorInstalacion();
+  if (!ESTADO.instalacion) return;
+
+  $("#b-ingreso").onclick = abrirFormularioIngreso;
+  await refrescarAccesos();
+}
+
+async function refrescarAccesos() {
+  const zona = $("#zona-adentro");
+  if (!zona) return;
+  let dentro, hoy;
+  try {
+    [dentro, hoy] = await Promise.all([
+      pedir(`/accesos?instalacion=${ESTADO.instalacion}&adentro=1`),
+      pedir(`/accesos?instalacion=${ESTADO.instalacion}&desde=${fechaHoy()}`),
+    ]);
+  } catch (e) {
+    zona.innerHTML = `<div class="aviso aviso--rojo">${esc(e.message)}</div>`;
+    return;
+  }
+
+  const globo = $("#globo-adentro");
+  if (globo) {
+    globo.textContent = dentro.accesos.length;
+    globo.hidden = dentro.accesos.length === 0;
+  }
+
+  // Lo de hoy que ya salió: va debajo y plegado, porque lo que se mira todo el
+  // turno es quién sigue adentro.
+  const salidos = hoy.accesos.filter((a) => !a.adentro);
+
+  zona.innerHTML = `
+    <h2 style="margin:1.1rem 0 .5rem">Adentro ahora
+      <span class="sello ${dentro.accesos.length ? "sello--verde" : "sello--gris"}">${dentro.accesos.length}</span>
+    </h2>
+    ${dentro.accesos.length
+      ? `<ul class="lista lista--dos">${dentro.accesos.map(filaAcceso).join("")}</ul>`
+      : `<div class="vacio">No hay nadie adentro registrado.</div>`}
+
+    <h2 style="margin:1.4rem 0 .5rem">Ya salieron hoy
+      <span class="sello sello--gris">${salidos.length}</span>
+    </h2>
+    ${salidos.length
+      ? `<ul class="lista lista--dos">${salidos.map(filaAcceso).join("")}</ul>`
+      : `<div class="vacio">Todavía nadie.</div>`}
+    ${hoy.tope_alcanzado ? `<p class="chico gris">Se muestran los primeros registros del día.</p>` : ""}`;
+
+  zona.onclick = async (ev) => {
+    const b = ev.target.closest("button[data-salida]");
+    if (!b) return;
+    const id = b.dataset.salida;
+    const quien = b.dataset.quien || "este ingreso";
+    // Se pregunta porque no se puede deshacer: una salida marcada no se
+    // corrige, igual que una marca del libro de asistencia.
+    if (!confirm(`¿Marcar la salida de ${quien}?\n\nUna salida no se corrige después.`)) return;
+    await ocupado(b, async () => {
+      try {
+        await pedir(`/accesos/${id}/salida`, { cuerpo: {} });
+        recado("Salida marcada.");
+        await refrescarAccesos();
+      } catch (e) { recado(e.message, true); }
+    });
+  };
+}
+
+function filaAcceso(a) {
+  const quien = a.nombre || (a.run ? rutLindo(a.run) : null);
+  const titulo = quien || (a.patente ? a.patente : "Sin identificar");
+  const vencido = a.documento_vence && a.documento_vence < fechaHoy();
+  const detalles = [
+    a.run && a.nombre ? rutLindo(a.run) : null,
+    a.empresa,
+    a.patente ? `${a.vehiculo_tipo || "Vehículo"} ${a.patente}` : null,
+    a.acompanantes ? `+${a.acompanantes} acompañante${a.acompanantes > 1 ? "s" : ""}` : null,
+    a.motivo,
+    a.a_quien_visita ? `visita a ${a.a_quien_visita}` : null,
+  ].filter(Boolean);
+
+  return `<li class="item ${a.adentro ? "item--adentro" : ""}">
+    <div class="fila fila--entre">
+      <div class="crece">
+        <b>${esc(titulo)}</b>
+        ${a.origen_run === "qr" ? '<span class="sello sello--cian">QR</span>' : ""}
+        ${a.origen_run === "sin_documento" ? '<span class="sello sello--ambar">Sin documento</span>' : ""}
+        ${vencido ? '<span class="sello sello--ambar">Documento vencido</span>' : ""}
+        ${a.anonimizado_en ? '<span class="sello sello--gris">Datos borrados</span>' : ""}
+      </div>
+      <span class="cuando">${esc(hora(a.entrada_en))}${a.salida_en ? " → " + esc(hora(a.salida_en)) : ""}</span>
+    </div>
+    ${detalles.length ? `<div class="detalle">${esc(detalles.join(" · "))}</div>` : ""}
+    ${a.nota ? `<div class="detalle">${esc(a.nota)}</div>` : ""}
+    ${a.adentro
+      ? `<div style="margin-top:.55rem">
+           <button class="bt bt--ancho" data-salida="${a.id}" data-quien="${esc(titulo)}">Marcar salida</button>
+         </div>`
+      : `<div class="detalle gris">${a.horas != null ? esc(a.horas) + " h adentro" : ""}
+           ${a.salida_por_nombre ? "· salida por " + esc(a.salida_por_nombre) : ""}</div>`}
+  </li>`;
+}
+
+// ------------------------------------------------- registrar un ingreso
+function abrirFormularioIngreso() {
+  abrirCajon("Registrar ingreso", `
+    <div id="zona-escaner"></div>
+    <button class="bt bt--ancho" id="b-escanear" style="margin-bottom:.8rem">
+      Escanear el código de la cédula
+    </button>
+    <div id="aviso-cedula"></div>
+
+    <form id="f-ingreso">
+      <div class="dosColumnas">
+        <div>
+          <label for="i-run">RUN</label>
+          <input id="i-run" name="run" inputmode="text" autocapitalize="characters"
+                 autocorrect="off" spellcheck="false" placeholder="12.345.678-9">
+        </div>
+        <div>
+          <label for="i-nombre">Nombre</label>
+          <input id="i-nombre" name="nombre" autocomplete="off" autocapitalize="words">
+        </div>
+        <div>
+          <label for="i-empresa">Empresa</label>
+          <input id="i-empresa" name="empresa" autocomplete="off" autocapitalize="words">
+        </div>
+        <div>
+          <label for="i-visita">¿A quién viene a ver?</label>
+          <input id="i-visita" name="a_quien_visita" autocomplete="off" autocapitalize="words">
+        </div>
+      </div>
+
+      <label for="i-motivo">¿A qué viene?</label>
+      <input id="i-motivo" name="motivo" list="motivos" autocomplete="off">
+      <datalist id="motivos">
+        <option value="Mantención"></option><option value="Carga o descarga"></option>
+        <option value="Visita"></option><option value="Obra o construcción"></option>
+        <option value="Inspección"></option><option value="Retiro de residuos"></option>
+        <option value="Emergencia"></option>
+      </datalist>
+
+      <label class="casilla" style="margin-top:.9rem">
+        <input type="checkbox" id="i-tiene-vehiculo">
+        <span>Viene en vehículo</span>
+      </label>
+
+      <div id="zona-vehiculo" hidden>
+        <div class="dosColumnas">
+          <div>
+            <label for="i-patente">Patente</label>
+            <input id="i-patente" name="patente" autocapitalize="characters"
+                   autocorrect="off" spellcheck="false" placeholder="KXKX12">
+          </div>
+          <div>
+            <label for="i-vtipo">Tipo</label>
+            <select id="i-vtipo" name="vehiculo_tipo">
+              <option value="">—</option>
+              <option>auto</option><option>camioneta</option><option>camión</option>
+              <option>furgón</option><option>bus</option><option>moto</option>
+              <option>maquinaria</option><option>otro</option>
+            </select>
+          </div>
+          <div>
+            <label for="i-vdet">Marca, modelo o color</label>
+            <input id="i-vdet" name="vehiculo_detalle" autocomplete="off">
+          </div>
+          <div>
+            <label for="i-acomp">Acompañantes</label>
+            <input id="i-acomp" name="acompanantes" type="number" min="0" max="99" value="0">
+          </div>
+        </div>
+      </div>
+
+      <label for="i-nota">Observación</label>
+      <textarea id="i-nota" name="nota" style="min-height:70px"
+        placeholder="Lo que haya que dejar escrito"></textarea>
+
+      <div class="pie-hoja">
+        <button class="bt" type="button" id="b-cancelar-ing">Cancelar</button>
+        <button class="bt bt--verde" type="submit">Registrar ingreso</button>
+      </div>
+    </form>
+  `, () => {
+    $("#b-cancelar-ing").onclick = cerrarCajon;
+    $("#b-escanear").onclick = abrirEscaner;
+    $("#i-tiene-vehiculo").onchange = (ev) => {
+      $("#zona-vehiculo").hidden = !ev.target.checked;
+      if (ev.target.checked) $("#i-patente").focus();
+    };
+    $("#f-ingreso").onsubmit = enviarIngreso;
+    // El cajón puede cerrarse con la cámara prendida: hay que apagarla o el
+    // teléfono se queda con la luz del lente encendida y la batería corriendo.
+    alCerrarCajon = apagarEscaner;
+  });
+}
+
+// Lo último que leyó el escáner, para mandárselo al servidor tal cual. Lo que
+// se muestra en los campos es una lectura de acá, pero lo que se guarda sale
+// de que el servidor lea otra vez este mismo texto: entre la cámara y el
+// servidor hay una página web, y una página web se puede cambiar desde la
+// consola del teléfono.
+let qrCrudo = null;
+
+async function enviarIngreso(ev) {
+  ev.preventDefault();
+  const boton = $("#f-ingreso button[type=submit]");
+  const f = ev.target;
+  const tieneVehiculo = $("#i-tiene-vehiculo").checked;
+
+  await ocupado(boton, async () => {
+    const pos = await ubicacion();
+    const cuerpo = {
+      instalacion_id: ESTADO.instalacion,
+      qr: qrCrudo || undefined,
+      run: f.run.value,
+      nombre: f.nombre.value,
+      empresa: f.empresa.value,
+      motivo: f.motivo.value,
+      a_quien_visita: f.a_quien_visita.value,
+      nota: f.nota.value,
+      patente: tieneVehiculo ? f.patente.value : "",
+      vehiculo_tipo: tieneVehiculo ? f.vehiculo_tipo.value : "",
+      vehiculo_detalle: tieneVehiculo ? f.vehiculo_detalle.value : "",
+      acompanantes: tieneVehiculo ? f.acompanantes.value : 0,
+      lat: pos.lat, lon: pos.lon,
+    };
+    try {
+      const r = await pedir("/accesos", { cuerpo });
+      apagarEscaner();
+      qrCrudo = null;
+      cerrarCajon();
+      recado(r.avisos && r.avisos.length ? "Ingreso registrado, con avisos." : "Ingreso registrado.");
+      await refrescarAccesos();
+      // Lo que el sistema no pudo dar por bueno se dice, no se calla: un
+      // documento vencido o un RUN con el dígito malo quedan registrados, y
+      // quien los registró tiene que enterarse ahora y no un mes después.
+      if (r.avisos && r.avisos.length) {
+        const zona = $("#zona-adentro");
+        const caja = document.createElement("div");
+        caja.className = "aviso aviso--ambar";
+        caja.innerHTML = r.avisos.map(esc).join("<br>");
+        zona.prepend(caja);
+        setTimeout(() => caja.remove(), 15000);
+      }
+    } catch (e) { recado(e.message, true); }
+  });
+}
+
+// ---------------------------------------------------------- el escáner
+/* Cómo se lee el código.
+ *
+ * Primero `BarcodeDetector`, que viene en el navegador y usa el lector del
+ * sistema: es el que anda rápido y gasta poca batería. No existe en Safari de
+ * iPhone, así que para esos se baja jsqr.js —que está servido desde este mismo
+ * dominio— y se lee cuadro por cuadro sobre un canvas.
+ *
+ * La librería se baja **solo si hace falta**: en un Android con Chrome al día
+ * esos 250 KB no se descargan nunca.
+ */
+let camara = null;        // el MediaStream
+let leyendo = false;
+let jsqrListo = null;     // la promesa de la carga, para no bajarla dos veces
+
+function cargarJsQR() {
+  if (window.jsQR) return Promise.resolve(true);
+  if (jsqrListo) return jsqrListo;
+  jsqrListo = new Promise((listo) => {
+    const s = document.createElement("script");
+    s.src = "jsqr.js";
+    s.onload = () => listo(!!window.jsQR);
+    s.onerror = () => listo(false);
+    document.head.appendChild(s);
+  });
+  return jsqrListo;
+}
+
+async function abrirEscaner() {
+  const zona = $("#zona-escaner");
+  if (!zona) return;
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    $("#aviso-cedula").innerHTML =
+      `<div class="aviso aviso--ambar">Este navegador no deja usar la cámara.
+       Escriba el RUN a mano.</div>`;
+    return;
+  }
+
+  zona.innerHTML = `
+    <div class="escaner">
+      <video id="v-camara" playsinline muted autoplay></video>
+      <div class="mira"></div>
+      <div class="pista" id="pista-escaner">Apunte al código de la cédula</div>
+    </div>
+    <button class="bt bt--ancho" id="b-cerrar-escaner" style="margin-bottom:.8rem">Cerrar la cámara</button>`;
+  $("#b-cerrar-escaner").onclick = apagarEscaner;
+
+  try {
+    camara = await navigator.mediaDevices.getUserMedia({
+      // La de atrás, que es la que apunta al documento.
+      video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 } },
+      audio: false,
+    });
+  } catch (e) {
+    zona.innerHTML = "";
+    $("#aviso-cedula").innerHTML =
+      `<div class="aviso aviso--ambar">No se pudo abrir la cámara
+       (${esc(e.name === "NotAllowedError" ? "no dio el permiso" : e.name)}).
+       Escriba el RUN a mano: el ingreso se registra igual.</div>`;
+    return;
+  }
+
+  const video = $("#v-camara");
+  video.srcObject = camara;
+  await video.play().catch(() => {});
+  leyendo = true;
+  bucleDeLectura(video);
+}
+
+function apagarEscaner() {
+  leyendo = false;
+  if (camara) {
+    for (const pista of camara.getTracks()) pista.stop();
+    camara = null;
+  }
+  const zona = $("#zona-escaner");
+  if (zona) zona.innerHTML = "";
+}
+
+async function bucleDeLectura(video) {
+  let detector = null;
+  if ("BarcodeDetector" in window) {
+    try {
+      const formatos = await window.BarcodeDetector.getSupportedFormats();
+      if (formatos.includes("qr_code")) {
+        detector = new window.BarcodeDetector({ formats: ["qr_code"] });
+      }
+    } catch (_) { detector = null; }
+  }
+
+  let lienzo = null, ctx = null;
+  if (!detector) {
+    const hay = await cargarJsQR();
+    if (!hay) {
+      const pista = $("#pista-escaner");
+      if (pista) pista.textContent = "No se pudo cargar el lector. Escriba el RUN a mano.";
+      return;
+    }
+    lienzo = document.createElement("canvas");
+    ctx = lienzo.getContext("2d", { willReadFrequently: true });
+  }
+
+  const paso = async () => {
+    if (!leyendo || !video.isConnected) return;
+    let texto = null;
+    try {
+      if (detector) {
+        const encontrados = await detector.detect(video);
+        if (encontrados.length) texto = encontrados[0].rawValue;
+      } else if (video.videoWidth) {
+        // A media resolución: alcanza de sobra para un QR y deja el teléfono
+        // sin calentarse, que importa cuando esto corre un turno entero.
+        lienzo.width = Math.round(video.videoWidth / 2);
+        lienzo.height = Math.round(video.videoHeight / 2);
+        ctx.drawImage(video, 0, 0, lienzo.width, lienzo.height);
+        const img = ctx.getImageData(0, 0, lienzo.width, lienzo.height);
+        const r = window.jsQR(img.data, img.width, img.height, { inversionAttempts: "dontInvert" });
+        if (r && r.data) texto = r.data;
+      }
+    } catch (_) { /* un cuadro que no se pudo leer no es un error */ }
+
+    if (texto) { usarCodigo(texto); return; }
+    // ~8 lecturas por segundo. Más seguido no lee mejor y calienta el teléfono.
+    setTimeout(() => requestAnimationFrame(paso), 120);
+  };
+  requestAnimationFrame(paso);
+}
+
+/** Llegó un código. Se lee acá para mostrarlo al tiro, y se guarda crudo. */
+function usarCodigo(texto) {
+  const r = leerCedulaEnPantalla(texto);
+  const caja = $("#aviso-cedula");
+
+  if (!r.ok) {
+    // No era una cédula. Puede ser el QR de una guía de despacho, de un
+    // WhatsApp, de cualquier cosa pegada en el parabrisas.
+    if (caja) caja.innerHTML =
+      `<div class="aviso aviso--ambar">${esc(r.motivo)}. Siga apuntando o escriba el RUN a mano.</div>`;
+    // Se sigue leyendo: lo normal es que el primer código que entra al cuadro
+    // no sea el de la cédula.
+    const video = $("#v-camara");
+    if (video && leyendo) setTimeout(() => bucleDeLectura(video), 900);
+    return;
+  }
+
+  qrCrudo = texto;
+  apagarEscaner();
+  if (navigator.vibrate) { try { navigator.vibrate(40); } catch (_) {} }
+
+  const campo = $("#i-run");
+  if (campo) campo.value = rutLindo(r.run);
+  const nombre = $("#i-nombre");
+  if (nombre && !nombre.value) nombre.focus();
+
+  const notas = [`${r.tipo_nombre} leída: ${rutLindo(r.run)}.`];
+  if (!r.dv_ok) notas.push("Ojo: el dígito verificador no cuadra, revise contra el documento.");
+  if (r.vencida) notas.push(`El documento está vencido (venció el ${r.vence}).`);
+  if (caja) {
+    caja.innerHTML = `<div class="aviso ${r.dv_ok && !r.vencida ? "aviso--verde" : "aviso--ambar"}">
+      ${notas.map(esc).join("<br>")}</div>`;
+  }
+  recado("Cédula leída. Falta el nombre.");
+}
+
+/* Lee el código de la cédula para MOSTRARLO.
+ *
+ * Es la misma lectura que hace src/cedula.js en el servidor, y está acá
+ * repetida a propósito: sin esto habría que mandar cada cuadro al servidor
+ * para saber si sirve, que en un parque con señal mala es exactamente lo que
+ * no se puede hacer.
+ *
+ * Lo que vale es lo del servidor. Esta copia solo decide qué se pinta en la
+ * pantalla mientras el guardia mira el carnet; cuando se aprieta «Registrar»,
+ * se manda el texto crudo y el servidor lo vuelve a leer con la suya. */
+function leerCedulaEnPantalla(texto) {
+  let url;
+  try { url = new URL(String(texto || "").trim()); }
+  catch (_) { return { ok: false, motivo: "El código leído no es el de una cédula chilena" }; }
+  if (url.hostname.toLowerCase() !== "portal.sidiv.registrocivil.cl") {
+    return { ok: false, motivo: "El código leído no es el de una cédula chilena" };
+  }
+  const run = String(url.searchParams.get("RUN") || "").toUpperCase().replace(/[.\-\s]/g, "");
+  if (!/^[0-9]{6,9}[0-9K]$/.test(run)) {
+    return { ok: false, motivo: "El código no trae un RUN que se pueda leer" };
+  }
+  const tipo = (url.searchParams.get("type") || "").toUpperCase();
+  const nombres = {
+    CEDULA: "Cédula de identidad",
+    CEDULA_EXT: "Cédula de identidad para extranjeros",
+    PASAPORTE: "Pasaporte", PASAPORTE_PG: "Pasaporte diplomático",
+    PASAPORTE_OFICIAL: "Pasaporte oficial",
+  };
+  const serie = (url.searchParams.get("serial") || "").trim();
+  const mrz = (url.searchParams.get("mrz") || "").trim();
+  let vence = null;
+  if (serie && mrz.startsWith(serie)) {
+    const resto = mrz.slice(serie.length);
+    if (resto.length >= 14) {
+      const seis = resto.slice(8, 14);
+      // El vencimiento siempre es de este siglo: estos códigos existen solo en
+      // cédulas emitidas desde 2013.
+      if (/^\d{6}$/.test(seis)) vence = `20${seis.slice(0, 2)}-${seis.slice(2, 4)}-${seis.slice(4, 6)}`;
+    }
+  }
+  return {
+    ok: true, run, tipo, tipo_nombre: nombres[tipo] || "Documento", vence,
+    dv_ok: dvEnPantalla(run),
+    vencida: vence ? vence < fechaHoy() : false,
+  };
+}
+
+function dvEnPantalla(rut) {
+  const cuerpo = rut.slice(0, -1), dv = rut.slice(-1);
+  let suma = 0, factor = 2;
+  for (let i = cuerpo.length - 1; i >= 0; i--) {
+    suma += Number(cuerpo[i]) * factor;
+    factor = factor === 7 ? 2 : factor + 1;
+  }
+  const resto = 11 - (suma % 11);
+  return dv === (resto === 11 ? "0" : resto === 10 ? "K" : String(resto));
+}
+
+// ======================================================== vista: novedades
+async function vistaNovedades() {
+  const hoja = $("#hoja");
+  hoja.innerHTML = selectorInstalacion() +
+    (ESTADO.instalacion
+      ? `<button class="bt bt--fuerte bt--grande bt--ancho" id="b-novedad">+ Escribir novedad</button>
+         <div id="zona-novedades"><div class="vacio">Cargando…</div></div>`
+      : sinInstalacion());
+  conectarSelectorInstalacion();
+  if (!ESTADO.instalacion) return;
+
+  $("#b-novedad").onclick = () => abrirFormularioNovedad(null);
+  await refrescarNovedades();
+}
+
+async function refrescarNovedades() {
+  const zona = $("#zona-novedades");
+  if (!zona) return;
+  let r;
+  try {
+    r = await pedir(`/novedades?instalacion=${ESTADO.instalacion}&desde=${fechaHoy()}`);
+  } catch (e) {
+    zona.innerHTML = `<div class="aviso aviso--rojo">${esc(e.message)}</div>`;
+    return;
+  }
+
+  // Qué anotación corrige a cuál, para poder marcarlas.
+  const corregidas = new Set(r.novedades.filter((n) => n.corrige_id).map((n) => n.corrige_id));
+
+  zona.innerHTML = `
+    <h2 style="margin:1.1rem 0 .5rem">Hoy
+      <span class="sello sello--gris">${r.novedades.length}</span>
+    </h2>
+    ${r.novedades.length
+      ? `<ul class="lista">${r.novedades.map((n) => filaNovedad(n, corregidas)).join("")}</ul>`
+      : `<div class="vacio">Todavía no hay novedades escritas hoy.</div>`}
+    <p class="chico gris" style="margin-top:1rem">
+      Una novedad escrita no se edita ni se borra. Si quedó mal, se corrige
+      escribiendo otra: las dos quedan a la vista, como en el libro de papel.
+    </p>`;
+
+  zona.onclick = (ev) => {
+    const b = ev.target.closest("button[data-corrige]");
+    if (b) abrirFormularioNovedad(b.dataset.corrige);
+  };
+}
+
+function filaNovedad(n, corregidas) {
+  return `<li class="item">
+    <div class="fila fila--entre">
+      <div class="crece">
+        <span class="sello ${n.corrige_id ? "sello--ambar" : "sello--cian"}">
+          ${esc(n.corrige_id ? "Corrección" : (ESTADO.categorias[n.categoria] || n.categoria))}
+        </span>
+        ${corregidas.has(n.id) ? '<span class="sello sello--gris">Corregida después</span>' : ""}
+      </div>
+      <span class="cuando">${esc(hora(n.cuando))}</span>
+    </div>
+    <p style="margin:.4rem 0 .2rem;white-space:pre-wrap">${esc(n.texto)}</p>
+    <div class="detalle gris">
+      ${esc(n.quien_nombre)}
+      ${n.corrige_id ? ` · corrige la anotación #${n.corrige_id}` : ""}
+    </div>
+    ${!n.corrige_id ? `<div style="margin-top:.5rem">
+      <button class="bt bt--fantasma" data-corrige="${n.id}">Corregir</button></div>` : ""}
+  </li>`;
+}
+
+function abrirFormularioNovedad(corrigeId) {
+  const cats = Object.entries(ESTADO.categorias);
+  abrirCajon(corrigeId ? "Corregir una novedad" : "Escribir una novedad", `
+    ${corrigeId ? `<div class="aviso aviso--ambar">
+      Esto no borra la anotación #${esc(corrigeId)}: escribe una nueva que la corrige,
+      y las dos quedan en el libro.</div>` : ""}
+    <form id="f-novedad">
+      <label for="n-cat">¿De qué es?</label>
+      <select id="n-cat" name="categoria">
+        ${cats.map(([k, v]) => `<option value="${esc(k)}" ${k === (corrigeId ? "otro" : "novedad") ? "selected" : ""}>${esc(v)}</option>`).join("")}
+      </select>
+      <label for="n-texto">¿Qué pasó?</label>
+      <textarea id="n-texto" name="texto" required
+        placeholder="Hora, lugar, qué se vio y qué se hizo."></textarea>
+      <div class="pie-hoja">
+        <button class="bt" type="button" id="b-cancelar-nov">Cancelar</button>
+        <button class="bt bt--fuerte" type="submit">Anotar en el libro</button>
+      </div>
+    </form>
+  `, () => {
+    $("#b-cancelar-nov").onclick = cerrarCajon;
+    $("#n-texto").focus();
+    $("#f-novedad").onsubmit = async (ev) => {
+      ev.preventDefault();
+      const boton = $("#f-novedad button[type=submit]");
+      await ocupado(boton, async () => {
+        const pos = await ubicacion();
+        try {
+          await pedir("/novedades", {
+            cuerpo: {
+              instalacion_id: ESTADO.instalacion,
+              categoria: $("#n-cat").value,
+              texto: $("#n-texto").value,
+              corrige_id: corrigeId || undefined,
+              lat: pos.lat, lon: pos.lon,
+            },
+          });
+          cerrarCajon();
+          recado("Anotado en el libro.");
+          await refrescarNovedades();
+        } catch (e) { recado(e.message, true); }
+      });
+    };
+  });
+}
+
+// =========================================================== vista: turno
+async function vistaTurno() {
+  const hoja = $("#hoja");
+  hoja.innerHTML = selectorInstalacion() +
+    (ESTADO.instalacion
+      ? `<button class="bt bt--fuerte bt--grande bt--ancho" id="b-turno">+ Hacer el cambio de turno</button>
+         <div id="zona-turnos"><div class="vacio">Cargando…</div></div>`
+      : sinInstalacion());
+  conectarSelectorInstalacion();
+  if (!ESTADO.instalacion) return;
+
+  $("#b-turno").onclick = abrirFormularioTurno;
+  await refrescarTurnos();
+}
+
+async function refrescarTurnos() {
+  const zona = $("#zona-turnos");
+  if (!zona) return;
+  let r;
+  try { r = await pedir(`/turnos?instalacion=${ESTADO.instalacion}`); }
+  catch (e) { zona.innerHTML = `<div class="aviso aviso--rojo">${esc(e.message)}</div>`; return; }
+
+  zona.innerHTML = `
+    <h2 style="margin:1.1rem 0 .5rem">Últimos cambios de turno</h2>
+    ${r.certificados.length
+      ? `<ul class="lista">${r.certificados.map(filaActa).join("")}</ul>`
+      : `<div class="vacio">Todavía no se ha hecho ningún cambio de turno acá.</div>`}`;
+
+  zona.onclick = (ev) => {
+    const b = ev.target.closest("button[data-acta]");
+    if (b) abrirActa("turnos", b.dataset.acta);
+  };
+}
+
+function filaActa(a) {
+  const esTurno = !!a.sale_nombre;
+  const sello = a.estado === "anulado" ? "sello--rojo"
+    : a.estado === "firmado" ? "sello--verde" : "sello--ambar";
+  const rotuloEstado = a.estado === "anulado" ? "Anulado"
+    : a.estado === "firmado" ? "Firmado" : "Falta firmar";
+  return `<li class="item ${a.estado === "anulado" ? "item--anulado" : ""}">
+    <div class="fila fila--entre">
+      <div class="crece">
+        <b>${esc(a.numero)}</b>
+        <span class="sello ${sello}">${rotuloEstado}</span>
+        ${a.firmas_descuadradas ? '<span class="sello sello--rojo">Firma descuadrada</span>' : ""}
+      </div>
+      <span class="cuando">${esc(fechaHora(esTurno ? a.cuando : a.ocurrido_en))}</span>
+    </div>
+    <div class="detalle">
+      ${esTurno
+        ? `Sale ${esc(a.sale_nombre)} · Entra ${esc(a.entra_nombre)}`
+        : `${esc(a.tipo)}${a.lugar ? " · " + esc(a.lugar) : ""}${a.policia ? " · con aviso a la autoridad" : ""}`}
+    </div>
+    ${a.anulado_motivo ? `<div class="detalle">Anulado: ${esc(a.anulado_motivo)}</div>` : ""}
+    <div style="margin-top:.5rem">
+      <button class="bt bt--ancho" data-acta="${a.id}">Abrir y firmar</button>
+    </div>
+  </li>`;
+}
+
+async function abrirFormularioTurno() {
+  let trabajadores = [];
+  try {
+    const r = await pedir(`/trabajadores?instalacion=${ESTADO.instalacion}`);
+    trabajadores = r.trabajadores;
+    // Si en esa instalación no hay nadie cargado, se ofrecen todos: pasa en un
+    // parque nuevo, donde todavía nadie tiene la instalación asignada en su
+    // ficha. Dejar la lista vacía obligaría a escribir los dos nombres a mano.
+    if (!trabajadores.length) trabajadores = (await pedir("/trabajadores")).trabajadores;
+  } catch (_) { /* se escriben a mano */ }
+
+  const opciones = (sel) => `
+    <option value="">— escribir el nombre a mano —</option>
+    ${trabajadores.map((t) => `<option value="${t.id}" ${String(t.id) === String(sel) ? "selected" : ""}>
+      ${esc(t.nombre)}</option>`).join("")}`;
+
+  // Si quien está usando la pantalla es un guardia, lo más probable es que sea
+  // una de las dos partes. Se propone como el que entra, que es quien tiene el
+  // teléfono en la mano al llegar.
+  const yo = ESTADO.usuario.tipo === "guardia" ? ESTADO.usuario : null;
+  const yoId = yo ? (trabajadores.find((t) => t.nombre === yo.nombre) || {}).id : null;
+
+  abrirCajon("Cambio de turno", `
+    <form id="f-turno">
+      <label for="t-sale">¿Quién se retira?</label>
+      <select id="t-sale">${opciones(null)}</select>
+      <input id="t-sale-nombre" placeholder="Nombre de quien se retira"
+             style="margin-top:.4rem" autocapitalize="words">
+
+      <label for="t-entra">¿Quién ingresa?</label>
+      <select id="t-entra">${opciones(yoId)}</select>
+      <input id="t-entra-nombre" placeholder="Nombre de quien ingresa"
+             style="margin-top:.4rem" autocapitalize="words">
+
+      <label for="t-entrega">¿Qué se entrega?</label>
+      <textarea id="t-entrega"
+        placeholder="Llaves, radio, linterna, libro, y lo que quede pendiente del turno."></textarea>
+
+      <div class="aviso aviso--gris">
+        El certificado va a decir solo cuántas personas y vehículos quedan adentro
+        y cuántas novedades se escribieron: eso lo saca el sistema, no hace falta
+        escribirlo.
+      </div>
+
+      <div class="pie-hoja">
+        <button class="bt" type="button" id="b-cancelar-turno">Cancelar</button>
+        <button class="bt bt--fuerte" type="submit">Emitir el certificado</button>
+      </div>
+    </form>
+  `, () => {
+    $("#b-cancelar-turno").onclick = cerrarCajon;
+
+    // El campo de texto solo se muestra cuando no se eligió a nadie de la lista.
+    const amarrar = (sel, campo) => {
+      const s = $(sel), i = $(campo);
+      const ver = () => { i.hidden = !!s.value; if (!s.value) i.required = true; else i.required = false; };
+      s.onchange = ver; ver();
+    };
+    amarrar("#t-sale", "#t-sale-nombre");
+    amarrar("#t-entra", "#t-entra-nombre");
+
+    $("#f-turno").onsubmit = async (ev) => {
+      ev.preventDefault();
+      const boton = $("#f-turno button[type=submit]");
+      await ocupado(boton, async () => {
+        try {
+          const r = await pedir("/turnos", {
+            cuerpo: {
+              instalacion_id: ESTADO.instalacion,
+              sale_trabajador_id: $("#t-sale").value || undefined,
+              sale_nombre: $("#t-sale-nombre").value,
+              entra_trabajador_id: $("#t-entra").value || undefined,
+              entra_nombre: $("#t-entra-nombre").value,
+              entrega: $("#t-entrega").value,
+            },
+          });
+          cerrarCajon();
+          recado("Certificado emitido. Falta que firmen los dos.");
+          await refrescarTurnos();
+          abrirActa("turnos", r.certificado.id);
+        } catch (e) { recado(e.message, true); }
+      });
+    };
+  });
+}
+
+// ========================================================= vista: eventos
+async function vistaEventos() {
+  const hoja = $("#hoja");
+  hoja.innerHTML = selectorInstalacion() +
+    (ESTADO.instalacion
+      ? `<button class="bt bt--fuerte bt--grande bt--ancho" id="b-evento">+ Informar un evento</button>
+         <div id="zona-eventos"><div class="vacio">Cargando…</div></div>`
+      : sinInstalacion());
+  conectarSelectorInstalacion();
+  if (!ESTADO.instalacion) return;
+
+  $("#b-evento").onclick = abrirFormularioEvento;
+  await refrescarEventos();
+}
+
+async function refrescarEventos() {
+  const zona = $("#zona-eventos");
+  if (!zona) return;
+  let r;
+  try { r = await pedir(`/eventos?instalacion=${ESTADO.instalacion}`); }
+  catch (e) { zona.innerHTML = `<div class="aviso aviso--rojo">${esc(e.message)}</div>`; return; }
+
+  zona.innerHTML = `
+    <h2 style="margin:1.1rem 0 .5rem">Eventos informados</h2>
+    ${r.eventos.length
+      ? `<ul class="lista">${r.eventos.map(filaActa).join("")}</ul>`
+      : `<div class="vacio">No hay eventos informados en esta instalación.</div>`}`;
+
+  zona.onclick = (ev) => {
+    const b = ev.target.closest("button[data-acta]");
+    if (b) abrirActa("eventos", b.dataset.acta);
+  };
+}
+
+function abrirFormularioEvento() {
+  abrirCajon("Informar un evento especial", `
+    <form id="f-evento">
+      <label for="v-tipo">¿Qué clase de evento?</label>
+      <select id="v-tipo" required>
+        <option value="">— elija —</option>
+        ${ESTADO.tiposEvento.map((t) => `<option>${esc(t)}</option>`).join("")}
+      </select>
+
+      <div class="dosColumnas">
+        <div>
+          <label for="v-fecha">¿Qué día ocurrió?</label>
+          <input id="v-fecha" type="date" value="${fechaHoy()}" max="${fechaHoy()}" required>
+        </div>
+        <div>
+          <label for="v-hora">¿A qué hora?</label>
+          <input id="v-hora" type="time" value="${horaAhora()}" required>
+        </div>
+      </div>
+
+      <label for="v-lugar">¿En qué parte de la instalación?</label>
+      <input id="v-lugar" placeholder="Portería, perímetro norte, sala de inversores…">
+
+      <label for="v-invol">¿Quiénes o qué estuvieron involucrados?</label>
+      <textarea id="v-invol" style="min-height:70px"
+        placeholder="Nombres y RUN si se saben, patentes, qué se dañó."></textarea>
+
+      <label for="v-relato">¿Qué pasó?</label>
+      <textarea id="v-relato" required style="min-height:150px"
+        placeholder="Cuente en orden lo que vio: qué pasó, a qué hora, qué hizo usted."></textarea>
+
+      <label for="v-medidas">¿Qué se hizo?</label>
+      <textarea id="v-medidas" style="min-height:70px"
+        placeholder="A quién se avisó, qué se aseguró, qué quedó pendiente."></textarea>
+
+      <label class="casilla" style="margin-top:.9rem">
+        <input type="checkbox" id="v-policia">
+        <span>Se avisó a Carabineros o a la PDI</span>
+      </label>
+      <div id="v-zona-policia" hidden>
+        <label for="v-policia-det">¿Qué unidad, a qué hora, y número de parte si lo hay?</label>
+        <input id="v-policia-det">
+      </div>
+
+      <div class="aviso aviso--gris">
+        Esto se congela al emitirlo y se firma con el dedo. Es el documento que
+        después se le entrega al cliente o se lleva a Carabineros.
+      </div>
+
+      <div class="pie-hoja">
+        <button class="bt" type="button" id="b-cancelar-ev">Cancelar</button>
+        <button class="bt bt--fuerte" type="submit">Emitir el informe</button>
+      </div>
+    </form>
+  `, () => {
+    $("#b-cancelar-ev").onclick = cerrarCajon;
+    $("#v-policia").onchange = (ev) => { $("#v-zona-policia").hidden = !ev.target.checked; };
+    $("#f-evento").onsubmit = async (ev) => {
+      ev.preventDefault();
+      const boton = $("#f-evento button[type=submit]");
+      await ocupado(boton, async () => {
+        const pos = await ubicacion();
+        try {
+          const r = await pedir("/eventos", {
+            cuerpo: {
+              instalacion_id: ESTADO.instalacion,
+              tipo: $("#v-tipo").value,
+              ocurrido_fecha: $("#v-fecha").value,
+              ocurrido_hora: $("#v-hora").value,
+              lugar: $("#v-lugar").value,
+              involucrados: $("#v-invol").value,
+              relato: $("#v-relato").value,
+              medidas: $("#v-medidas").value,
+              policia: $("#v-policia").checked,
+              policia_detalle: $("#v-policia-det").value,
+              lat: pos.lat, lon: pos.lon,
+            },
+          });
+          cerrarCajon();
+          recado("Informe emitido. Falta firmarlo.");
+          await refrescarEventos();
+          abrirActa("eventos", r.evento.id);
+        } catch (e) { recado(e.message, true); }
+      });
+    };
+  });
+}
+
+// ==================================================== un acta: leer y firmar
+let lienzoFirma = null;
+
+async function abrirActa(cual, id) {
+  let r;
+  try { r = await pedir(`/${cual}/${id}`); }
+  catch (e) { recado(e.message, true); return; }
+
+  const d = r.documento;
+  const firmadas = new Set(r.firmas.map((f) => f.rol));
+  const faltan = r.faltan;
+
+  abrirCajon(d.numero, `
+    ${d.estado === "anulado"
+      ? `<div class="aviso aviso--rojo"><b>Documento anulado.</b><br>${esc(d.anulado_motivo || "")}</div>` : ""}
+    ${r.descuadrado
+      ? `<div class="aviso aviso--rojo">Una de las firmas no corresponde al texto
+         que este documento tiene ahora. No lo use como respaldo: avise a la oficina.</div>` : ""}
+
+    <div class="actaTexto">${esc(d.cuerpo)}</div>
+
+    <h3 style="margin:1rem 0 .5rem">Firmas</h3>
+    ${r.firmas.length ? r.firmas.map((f) => `
+      <div class="item">
+        <div class="fila fila--entre">
+          <b>${esc(f.rol_nombre)}</b>
+          <span class="cuando">${esc(fechaHora(f.firmado_en))}</span>
+        </div>
+        <div class="detalle">${esc(f.nombre)}${f.rut ? " · " + esc(rutLindo(f.rut)) : ""}</div>
+        <img class="firmaHecha" src="${esc(f.imagen)}" alt="Firma de ${esc(f.nombre)}">
+      </div>`).join("") : `<p class="chico gris">Todavía no ha firmado nadie.</p>`}
+
+    ${(d.estado !== "anulado" && faltan.length) ? `
+      <h3 style="margin:1.2rem 0 .4rem">Firmar</h3>
+      <label for="a-rol">¿Quién está firmando?</label>
+      <select id="a-rol">
+        ${faltan.map((rol) => `<option value="${esc(rol)}">${esc(r.roles[rol])}</option>`).join("")}
+      </select>
+      <div class="aviso aviso--gris" id="a-quien-firma"></div>
+      <label style="margin-top:.7rem">Firme con el dedo</label>
+      <canvas class="lienzo" id="a-lienzo"></canvas>
+      <div class="fila" style="margin-top:.4rem">
+        <button type="button" class="bt bt--fantasma" id="b-limpiar-firma">Borrar y empezar de nuevo</button>
+      </div>
+      <label class="casilla" style="margin-top:.6rem">
+        <input type="checkbox" id="a-leido">
+        <span>Leí lo que dice este documento y estoy de acuerdo</span>
+      </label>
+      <p class="chico gris" style="margin-top:.5rem">
+        Firma electrónica simple de la Ley 19.799. Queda registrada la hora del
+        servidor, su cuenta y el documento exacto que firmó.
+      </p>
+      <button class="bt bt--verde bt--ancho" id="b-firmar" style="margin-top:.6rem">Firmar</button>
+    ` : (d.estado !== "anulado"
+        ? `<div class="aviso aviso--verde">Este documento está completo: firmaron todos.</div>` : "")}
+
+    <div class="pie-hoja pie-hoja--quieto">
+      <button class="bt" type="button" id="b-cerrar-acta">Cerrar</button>
+      ${(ESTADO.usuario.puede_anular && d.estado !== "anulado")
+        ? `<button class="bt bt--rojo" type="button" id="b-anular">Anular</button>` : ""}
+    </div>
+  `, () => {
+    $("#b-cerrar-acta").onclick = cerrarCajon;
+
+    const anular = $("#b-anular");
+    if (anular) anular.onclick = async () => {
+      const motivo = prompt("¿Por qué se anula? Queda escrito en el documento.");
+      if (motivo === null) return;
+      try {
+        await pedir(`/${cual}/${id}/anular`, { cuerpo: { motivo } });
+        cerrarCajon();
+        recado("Documento anulado.");
+        if (cual === "turnos") await refrescarTurnos(); else await refrescarEventos();
+      } catch (e) { recado(e.message, true); }
+    };
+
+    const lienzo = $("#a-lienzo");
+    if (!lienzo) return;
+    lienzoFirma = window.Firma.conectar(lienzo, {});
+    $("#b-limpiar-firma").onclick = () => lienzoFirma.limpiar();
+
+    /* A quién va a quedar atribuida la firma, dicho antes de firmar.
+     *
+     * En un cambio de turno los dos guardias firman en el mismo teléfono: el
+     * que está con la sesión abierta es uno solo, y el otro firma ahí mismo.
+     * El sistema guarda el nombre que el acta le pone a ese rol —congelado— y
+     * aparte la cuenta desde la que se firmó, que son dos cosas distintas y
+     * las dos quedan escritas.
+     *
+     * Decirlo acá importa: lo que esta firma prueba es que alguien firmó ese
+     * texto, a esa hora, desde esa cuenta. Dejarlo implícito haría creer que
+     * el sistema verificó la identidad del que dibujó el trazo, y no lo hizo.
+     */
+    const nombreDeRol = {
+      sale: d.sale_nombre, entra: d.entra_nombre,
+      autor: d.creado_por_nombre, testigo: null,
+    };
+    const decirQuienFirma = () => {
+      const rol = $("#a-rol").value;
+      const nombre = nombreDeRol[rol] || ESTADO.usuario.nombre;
+      $("#a-quien-firma").innerHTML =
+        `Va a quedar firmado por <b>${esc(nombre)}</b>, desde la cuenta de ` +
+        `${esc(ESTADO.usuario.nombre)} (${esc(ESTADO.usuario.usuario)}), que es la ` +
+        `que tiene la sesión abierta en este aparato.`;
+    };
+    $("#a-rol").onchange = decirQuienFirma;
+    decirQuienFirma();
+
+    $("#b-firmar").onclick = () => ocupado($("#b-firmar"), async () => {
+      if (lienzoFirma.vacio()) { recado("Dibuje su firma antes de firmar.", true); return; }
+      if (!$("#a-leido").checked) { recado("Marque que leyó el documento.", true); return; }
+      try {
+        const res = await pedir(`/${cual}/${id}/firma`, {
+          cuerpo: { rol: $("#a-rol").value, imagen: lienzoFirma.png(), leido: true },
+        });
+        recado(res.faltan.length ? `Firmado. Falta: ${res.faltan.join(", ")}.` : "Firmado por todos.");
+        if (cual === "turnos") await refrescarTurnos(); else await refrescarEventos();
+        await abrirActa(cual, id);   // se vuelve a abrir, ya con la firma puesta
+      } catch (e) { recado(e.message, true); }
+    });
+  });
+}
+
+// ============================================================== arranque
+const VISTAS = {
+  accesos: vistaAccesos,
+  novedades: vistaNovedades,
+  turno: vistaTurno,
+  eventos: vistaEventos,
+};
+
+function pintar() {
+  if (!ESTADO.usuario) { pintarIngreso(); return; }
+  if (!$("#pestanas")) pintarMarco();
+  marcarPestana();
+  // Si algo falla adentro de una vista, se dice en la pantalla en vez de
+  // dejarla a medio pintar sin explicación.
+  Promise.resolve(VISTAS[ESTADO.vista]()).catch((e) => {
+    $("#hoja").innerHTML = `<div class="aviso aviso--rojo">${esc(e.message)}</div>`;
+  });
+}
+
+async function arrancarSesion() {
+  const r = await pedir("/yo");
+  ESTADO.usuario = r.usuario;
+  ESTADO.instalaciones = r.instalaciones || [];
+  ESTADO.categorias = r.categorias || {};
+  ESTADO.tiposEvento = r.tipos_evento || [];
+  ESTADO.diasRetencion = r.dias_retencion || 365;
+
+  // La instalación: la que se eligió la última vez en este teléfono, si sigue
+  // existiendo; si no, la de la ficha del guardia. Se recuerda porque un
+  // guardia abre esta pantalla veinte veces por turno y siempre en el mismo
+  // parque: volvérsela a preguntar cada vez sería el trámite que hace que se
+  // deje de usar.
+  const guardada = leerLocal("instalacion");
+  const existe = (id) => ESTADO.instalaciones.some((i) => String(i.id) === String(id));
+  ESTADO.instalacion = (guardada && existe(guardada)) ? guardada
+    : (r.usuario.instalacion_id && existe(r.usuario.instalacion_id))
+      ? String(r.usuario.instalacion_id) : null;
+
+  const vistaGuardada = leerLocal("vista");
+  if (vistaGuardada && VISTAS[vistaGuardada]) ESTADO.vista = vistaGuardada;
+
+  pintarMarco();
+  pintar();
+}
+
+(async function arrancar() {
+  try {
+    await arrancarSesion();
+  } catch (e) {
+    // 401 es lo normal: todavía no entró nadie. Cualquier otro error se
+    // muestra, porque si no la pantalla de ingreso aparece igual y nadie se
+    // entera de que el problema era otro.
+    pintarIngreso(/Sin sesión|401/.test(e.message) ? null : e.message);
+  }
+})();
+</script>
+</body>
+</html>
