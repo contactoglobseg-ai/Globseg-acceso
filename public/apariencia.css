@@ -34,16 +34,33 @@
   --escala:1;
 
   /* Forma */
-  --r:12px; --r-s:9px; --r-xs:6px;
-  --sombra:0 1px 2px rgba(0,0,0,.05), 0 6px 20px rgba(0,0,0,.05);
-  --sombra-alta:0 2px 6px rgba(0,0,0,.08), 0 16px 48px rgba(0,0,0,.10);
+  --r:16px; --r-s:11px; --r-xs:7px;
+  --sombra:0 1px 2px rgba(16,8,48,.05), 0 8px 26px rgba(16,8,48,.07);
+  --sombra-alta:0 2px 8px rgba(16,8,48,.09), 0 20px 54px rgba(16,8,48,.14);
+
+  /* Vidrio: el desenfoque y el filete que definen el material. Están acá y no
+     en cada regla para poder subirlos o bajarlos en un solo lugar. */
+  --desenfoque:saturate(170%) blur(22px);
+  --brillo:inset 0 1px 0 rgba(255,255,255,.75);
+
+  /* La escena del fondo. Es lo que el vidrio tiene detrás: sin ella el
+     desenfoque de la lateral y del encabezado no tenía nada que mezclar, y el
+     material no se leía como vidrio sino como gris claro. Los tres colores
+     salen del escudo —tinta, verde y cian— y van bajos a propósito: esto se
+     mira ocho horas, no cinco segundos. */
+  --escena:
+    radial-gradient(70rem 48rem at 88% -6%, rgba(0,167,245,.30), transparent 60%),
+    radial-gradient(62rem 46rem at 0% 10%, rgba(0,232,138,.22), transparent 56%),
+    radial-gradient(58rem 46rem at 98% 90%, rgba(19,0,82,.16), transparent 62%),
+    linear-gradient(168deg,#E4EAF6 0%,#DCE3F2 54%,#D6DEEE 100%);
 
   /* Claro */
-  --fondo:#F5F5F7;
-  --sup:#FFFFFF; --sup-2:#F7F7F9; --sup-3:#EFEFF2;
-  --borde:#D9D9DF; --borde-suave:#E9E9ED;
-  --texto:#1D1D1F; --texto-2:#6E6E73; --texto-3:#8E8E93;
-  --cromo:rgba(255,255,255,.72); --cromo-borde:#DDDDE2;
+  --fondo:#DEE4F1;
+  --sup:rgba(255,255,255,.60); --sup-2:rgba(100,106,136,.07); --sup-3:rgba(120,125,150,.11);
+  --sup-solido:#FFFFFF;
+  --borde:rgba(94,100,130,.26); --borde-suave:rgba(94,100,130,.16);
+  --texto:#1A1B2E; --texto-2:#5A5F74; --texto-3:#7E8396;
+  --cromo:rgba(255,255,255,.62); --cromo-borde:rgba(94,100,130,.18);
   --acento:#0071A8; --acento-fuerte:#005682; --acento-suave:#E2F0F9;
   --btn:#0071A8; --btn-alta:#005682; --btn-texto:#FFFFFF;
   --verde:#1E8E52;  --verde-suave:#E0F3E8;    /* facturado / pagado */
@@ -58,11 +75,17 @@
 /* Oscuro. Negro real de fondo y superficies que suben por capas, como en las
    aplicaciones de Apple: la profundidad la da el gris, no la sombra. */
 :root[data-tema="oscuro"]{
-  --fondo:#000000;
-  --sup:#1C1C1E; --sup-2:#2C2C2E; --sup-3:#3A3A3C;
-  --borde:#38383A; --borde-suave:#2C2C2E;
-  --texto:#F5F5F7; --texto-2:#A1A1A6; --texto-3:#8E8E93;
-  --cromo:rgba(28,28,30,.72); --cromo-borde:#2C2C2E;
+  --escena:
+    radial-gradient(78rem 54rem at 86% -10%, rgba(0,167,245,.22), transparent 62%),
+    radial-gradient(64rem 48rem at 4% 8%, rgba(0,232,138,.13), transparent 58%),
+    radial-gradient(58rem 46rem at 96% 86%, rgba(30,10,114,.60), transparent 66%),
+    linear-gradient(170deg,#120A38 0%,#0A0328 52%,#06001C 100%);
+  --fondo:#06001C;
+  --sup:rgba(255,255,255,.075); --sup-2:rgba(255,255,255,.05); --sup-3:rgba(255,255,255,.1);
+  --sup-solido:#15103A;
+  --borde:rgba(255,255,255,.2); --borde-suave:rgba(255,255,255,.12);
+  --texto:#F5F5FA; --texto-2:rgba(245,245,250,.66); --texto-3:rgba(245,245,250,.46);
+  --cromo:rgba(12,4,46,.62); --cromo-borde:rgba(255,255,255,.14);
   --acento:#64D2FF; --acento-fuerte:#9BE2FF; --acento-suave:rgba(100,210,255,.16);
   --btn:#0A84FF; --btn-alta:#3D9BFF; --btn-texto:#FFFFFF;
   --verde:#30D158;  --verde-suave:rgba(48,209,88,.18);
@@ -71,19 +94,26 @@
   --gris:#98989D;   --gris-suave:rgba(152,152,157,.18);
   --rojo:#FF453A;   --rojo-suave:rgba(255,69,58,.18);
   --violeta:#BF9BFF; --violeta-suave:rgba(191,155,255,.18);
-  --sombra:0 1px 2px rgba(0,0,0,.5);
-  --sombra-alta:0 8px 36px rgba(0,0,0,.6);
+  --sombra:0 1px 2px rgba(0,0,0,.4), 0 8px 28px rgba(0,0,0,.34);
+  --sombra-alta:0 2px 8px rgba(0,0,0,.45), 0 22px 56px rgba(0,0,0,.5);
+  --brillo:inset 0 1px 0 rgba(255,255,255,.14);
   color-scheme:dark;
 }
 
 /* Sin elección guardada se sigue al sistema, como corresponde. */
 @media (prefers-color-scheme: dark){
   :root:not([data-tema="claro"]){
-    --fondo:#000000;
-    --sup:#1C1C1E; --sup-2:#2C2C2E; --sup-3:#3A3A3C;
-    --borde:#38383A; --borde-suave:#2C2C2E;
-    --texto:#F5F5F7; --texto-2:#A1A1A6; --texto-3:#8E8E93;
-    --cromo:rgba(28,28,30,.72); --cromo-borde:#2C2C2E;
+    --escena:
+      radial-gradient(78rem 54rem at 86% -10%, rgba(0,167,245,.22), transparent 62%),
+      radial-gradient(64rem 48rem at 4% 8%, rgba(0,232,138,.13), transparent 58%),
+      radial-gradient(58rem 46rem at 96% 86%, rgba(30,10,114,.60), transparent 66%),
+      linear-gradient(170deg,#120A38 0%,#0A0328 52%,#06001C 100%);
+    --fondo:#06001C;
+    --sup:rgba(255,255,255,.075); --sup-2:rgba(255,255,255,.05); --sup-3:rgba(255,255,255,.1);
+    --sup-solido:#15103A;
+    --borde:rgba(255,255,255,.2); --borde-suave:rgba(255,255,255,.12);
+    --texto:#F5F5FA; --texto-2:rgba(245,245,250,.66); --texto-3:rgba(245,245,250,.46);
+    --cromo:rgba(12,4,46,.62); --cromo-borde:rgba(255,255,255,.14);
     --acento:#64D2FF; --acento-fuerte:#9BE2FF; --acento-suave:rgba(100,210,255,.16);
     --btn:#0A84FF; --btn-alta:#3D9BFF; --btn-texto:#FFFFFF;
     --verde:#30D158;  --verde-suave:rgba(48,209,88,.18);
@@ -92,8 +122,9 @@
     --gris:#98989D;   --gris-suave:rgba(152,152,157,.18);
     --rojo:#FF453A;   --rojo-suave:rgba(255,69,58,.18);
     --violeta:#BF9BFF; --violeta-suave:rgba(191,155,255,.18);
-    --sombra:0 1px 2px rgba(0,0,0,.5);
-    --sombra-alta:0 8px 36px rgba(0,0,0,.6);
+    --sombra:0 1px 2px rgba(0,0,0,.4), 0 8px 28px rgba(0,0,0,.34);
+    --sombra-alta:0 2px 8px rgba(0,0,0,.45), 0 22px 56px rgba(0,0,0,.5);
+    --brillo:inset 0 1px 0 rgba(255,255,255,.14);
     color-scheme:dark;
   }
 }
@@ -105,6 +136,55 @@ html,body{margin:0;height:100%}
 body{background:var(--fondo);color:var(--texto);
   font:400 .9375rem/1.55 var(--cuerpo);
   -webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale}
+/* La escena, fija detrás de todo. Va en un pseudoelemento con position:fixed y
+   no en background-attachment:fixed, que en Safari de iPhone salta al
+   desplazarse. z-index:-1 la deja sobre el color de fondo del lienzo y debajo
+   de todo lo demás, y pointer-events:none para que no se coma ningún clic. */
+body::before{content:"";position:fixed;inset:0;z-index:-1;pointer-events:none;
+  background:var(--escena)}
+
+/* ---------- el material ----------
+   Una clase, para no repetir el desenfoque en veinte reglas. Cada página se la
+   pone a sus contenedores grandes.
+
+   Lo que a propósito NO lleva desenfoque: los campos de formulario y las filas
+   de una tabla. Son muchos —una ficha tiene treinta campos y una tabla cien
+   filas— y cada backdrop-filter es una capa que el navegador vuelve a componer
+   en cada cuadro: la pantalla que más se usa sería la que peor se desplaza.
+   Van translúcidos encima de una tarjeta que ya está desenfocada, que es lo
+   que los hace leerse como vidrio sin costar nada. */
+.vidrio{
+  -webkit-backdrop-filter:var(--desenfoque);
+  backdrop-filter:var(--desenfoque);
+}
+/* Donde el sistema pide menos transparencia, el vidrio se vuelve sólido en vez
+   de desaparecer: una tarjeta translúcida sobre una escena de colores es justo
+   lo que esa preferencia existe para apagar. */
+/* `:root[data-tema]` y no `:root` a secas: el bloque de oscuro se elige con
+   `:root[data-tema="oscuro"]`, que pesa más que `:root`, así que una
+   preferencia escrita con un solo `:root` no le ganaba y quien tuviera el
+   tema fijado en oscuro no veía ningún efecto. Comprobado, no supuesto. */
+@media (prefers-reduced-transparency:reduce){
+  :root,:root[data-tema]{
+    --sup:var(--sup-solido);--sup-2:var(--sup-solido);
+    --cromo:var(--sup-solido);--escena:none}
+  .vidrio{-webkit-backdrop-filter:none;backdrop-filter:none}
+}
+@media (prefers-contrast:more){
+  :root,:root[data-tema]{--borde:rgba(94,100,130,.5);--borde-suave:rgba(94,100,130,.34);
+    --sup:rgba(255,255,255,.93);--sup-2:var(--sup-solido);
+    --texto-2:#3F4458;--texto-3:#5A5F74}
+  :root[data-tema="oscuro"],:root[data-tema="auto"]{--borde:rgba(255,255,255,.42);
+    --borde-suave:rgba(255,255,255,.28);--sup:rgba(255,255,255,.15);
+    --sup-2:var(--sup-solido);
+    --texto-2:rgba(245,245,250,.86);--texto-3:rgba(245,245,250,.7)}
+  @media (prefers-color-scheme:dark){
+    :root:not([data-tema="claro"]){--borde:rgba(255,255,255,.42);
+      --borde-suave:rgba(255,255,255,.28);--sup:rgba(255,255,255,.15);
+      --sup-2:var(--sup-solido);
+      --texto-2:rgba(245,245,250,.86);--texto-3:rgba(245,245,250,.7)}
+  }
+}
 ::selection{background:var(--acento-suave);color:var(--texto)}
 :where(a,button,input,select,textarea):focus-visible{
   outline:2px solid var(--acento);outline-offset:2px}

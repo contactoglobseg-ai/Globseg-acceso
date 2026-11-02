@@ -54,8 +54,8 @@ p{margin:.4rem 0}
   padding:.55rem .8rem;
   padding-top:calc(.55rem + env(safe-area-inset-top));
   background:var(--cromo);
-  -webkit-backdrop-filter:saturate(180%) blur(20px);
-  backdrop-filter:saturate(180%) blur(20px);
+  -webkit-backdrop-filter:var(--desenfoque);
+  backdrop-filter:var(--desenfoque);
   border-bottom:1px solid transparent;
   transition:border-color .2s;
 }
@@ -83,11 +83,15 @@ p{margin:.4rem 0}
   .hoja{max-width:68rem;padding-bottom:2rem}
 }
 
+/* Un desenfoque por caja, no por fila de la lista: ver apariencia.css. */
 .caja{
   background:var(--sup);border:1px solid var(--borde-suave);
   border-radius:var(--r);padding:.85rem;margin-bottom:.7rem;
+  box-shadow:var(--sombra),var(--brillo);
+  -webkit-backdrop-filter:var(--desenfoque);backdrop-filter:var(--desenfoque);
 }
-.caja--plana{background:transparent;border:0;padding:0}
+.caja--plana{background:transparent;border:0;padding:0;box-shadow:none;
+  -webkit-backdrop-filter:none;backdrop-filter:none}
 
 .titulito{
   font-size:.7rem;letter-spacing:.07em;text-transform:uppercase;
@@ -133,7 +137,8 @@ button{font:inherit;font-family:var(--cuerpo)}
   min-height:34px;padding:.2rem .7rem;border:0;border-radius:999px;
   background:transparent;color:var(--texto-2);font-size:.82rem;cursor:pointer;
 }
-.seg button[aria-pressed="true"]{background:var(--sup);color:var(--texto);box-shadow:var(--sombra)}
+.seg button[aria-pressed="true"]{background:var(--sup-solido);color:var(--texto);
+  box-shadow:0 1px 3px rgba(16,8,48,.18)}
 
 /* =============================================================== campos */
 label{display:block;font-size:.78rem;color:var(--texto-2);margin:.6rem 0 .25rem;font-weight:500}
@@ -234,8 +239,8 @@ input[type=checkbox]{
   position:fixed;left:0;right:0;bottom:0;z-index:50;
   display:flex;
   background:var(--cromo);
-  -webkit-backdrop-filter:saturate(180%) blur(20px);
-  backdrop-filter:saturate(180%) blur(20px);
+  -webkit-backdrop-filter:var(--desenfoque);
+  backdrop-filter:var(--desenfoque);
   border-top:1px solid var(--cromo-borde);
   padding-bottom:env(safe-area-inset-bottom);
 }
@@ -283,10 +288,11 @@ input[type=checkbox]{
 .hojaSube{
   position:fixed;left:0;right:0;bottom:0;z-index:61;
   max-height:92vh;overflow-y:auto;overscroll-behavior:contain;
-  background:var(--sup);
-  border-radius:var(--r) var(--r) 0 0;
-  border-top:1px solid var(--borde-suave);
-  box-shadow:var(--sombra-alta);
+  background:var(--cromo);
+  -webkit-backdrop-filter:var(--desenfoque);backdrop-filter:var(--desenfoque);
+  border-radius:calc(var(--r) + 6px) calc(var(--r) + 6px) 0 0;
+  border-top:1px solid var(--cromo-borde);
+  box-shadow:var(--sombra-alta),var(--brillo);
   padding:.5rem 1rem calc(1.4rem + env(safe-area-inset-bottom));
   transform:translateY(100%);
   transition:transform .32s cubic-bezier(.32,.72,0,1);
@@ -296,7 +302,9 @@ input[type=checkbox]{
   width:36px;height:4px;border-radius:999px;background:var(--borde);
   margin:.4rem auto .8rem;
 }
-.hojaSube h2{position:sticky;top:0;background:var(--sup);padding:.2rem 0 .6rem;z-index:1}
+.hojaSube h2{position:sticky;top:0;z-index:1;
+  background:var(--cromo);padding:.4rem 1rem .6rem;margin-inline:-1rem;
+  -webkit-backdrop-filter:var(--desenfoque);backdrop-filter:var(--desenfoque)}
 
 @media (min-width:720px){
   .hojaSube{
@@ -311,8 +319,10 @@ input[type=checkbox]{
 }
 
 .pie-hoja{
-  position:sticky;bottom:0;background:var(--sup);
-  padding:.7rem 0 .2rem;margin-top:.8rem;
+  position:sticky;bottom:0;z-index:1;
+  background:var(--cromo);
+  -webkit-backdrop-filter:var(--desenfoque);backdrop-filter:var(--desenfoque);
+  padding:.7rem 1rem .2rem;margin-top:.8rem;margin-inline:-1rem;
   border-top:1px solid var(--borde-suave);
   display:flex;gap:.5rem;
 }
@@ -395,7 +405,8 @@ input[type=checkbox]{
   }
 }
 @media (prefers-reduced-transparency:reduce){
-  .barra,.pestanas{backdrop-filter:none;-webkit-backdrop-filter:none;background:var(--sup)}
+  .barra,.pestanas,.caja,.hojaSube{backdrop-filter:none;-webkit-backdrop-filter:none;
+    background:var(--sup-solido)}
 }
 @media (prefers-contrast:more){
   .caja,.item{border-color:var(--borde)}
