@@ -665,6 +665,15 @@ function abrirFormularioIngreso() {
       if (ev.target.checked) $("#i-patente").focus();
     };
     $("#f-ingreso").onsubmit = enviarIngreso;
+    ultimoConsultado = null;
+    // Escrito a mano también sirve: al salir del campo RUN se busca igual.
+    $("#i-run").onblur = (ev) => {
+      const run = String(ev.target.value || "").toUpperCase().replace(/[.\-\s]/g, "");
+      if (/^[0-9]{6,9}[0-9K]$/.test(run)) {
+        ev.target.value = rutLindo(run);
+        completarConocido(run);
+      }
+    };
     // El cajón puede cerrarse con la cámara prendida: hay que apagarla o el
     // teléfono se queda con la luz del lente encendida y la batería corriendo.
     alCerrarCajon = apagarEscaner;
@@ -874,17 +883,84 @@ function usarCodigo(texto) {
 
   const campo = $("#i-run");
   if (campo) campo.value = rutLindo(r.run);
-  const nombre = $("#i-nombre");
-  if (nombre && !nombre.value) nombre.focus();
 
   const notas = [`${r.tipo_nombre} leída: ${rutLindo(r.run)}.`];
+  if (r.vence) notas.push(`Vence el ${fechaCorta(r.vence)}${r.vencida ? " — ESTÁ VENCIDA" : ""}.`);
   if (!r.dv_ok) notas.push("Ojo: el dígito verificador no cuadra, revise contra el documento.");
-  if (r.vencida) notas.push(`El documento está vencido (venció el ${r.vence}).`);
   if (caja) {
     caja.innerHTML = `<div class="aviso ${r.dv_ok && !r.vencida ? "aviso--verde" : "aviso--ambar"}">
-      ${notas.map(esc).join("<br>")}</div>`;
+      ${notas.map(esc).join("<br>")}</div><div id="aviso-conocido"></div>`;
   }
-  recado("Cédula leída. Falta el nombre.");
+  completarConocido(r.run);
+}
+
+/* El QR de la cédula trae el RUN y las fechas, pero NO el nombre. Lo demás se
+ * busca en lo que la base ya sabe de ese RUN: si es trabajador de la empresa,
+ * o si ya entró antes (su último acceso). Se llenan solo los campos vacíos,
+ * para no pisar lo que el guardia ya escribió, y se dice de dónde salió. */
+let ultimoConsultado = null;
+async function completarConocido(run) {
+  if (!run || run === ultimoConsultado) return;
+  ultimoConsultado = run;
+  const zona = $("#aviso-conocido") || $("#aviso-cedula");
+  let d = null;
+  try {
+    d = await pedir(`/accesos/conocido?run=${encodeURIComponent(run)}`
+      + (ESTADO.instalacion ? `&instalacion=${ESTADO.instalacion}` : ""));
+  } catch (_) {
+    // Sin señal no se puede buscar: se sigue a mano, como siempre.
+    recado("Cédula leída. Escriba el nombre.");
+    $("#i-nombre") && $("#i-nombre").focus();
+    return;
+  }
+  // El guardia pudo haber cambiado el RUN mientras se buscaba.
+  const actual = String(($("#i-run") || {}).value || "").toUpperCase().replace(/[.\-\s]/g, "");
+  if (actual && actual !== run) return;
+
+  const llenados = [];
+  const poner = (id, valor, etiqueta) => {
+    const el = $(id);
+    if (!el || valor == null || valor === "" || String(el.value).trim()) return;
+    el.value = valor;
+    if (etiqueta) llenados.push(etiqueta);
+  };
+  if (d && d.conocido) {
+    poner("#i-nombre", d.nombre, "nombre");
+    poner("#i-empresa", d.empresa, "empresa");
+    poner("#i-visita", d.a_quien_visita, "a quién visita");
+    poner("#i-motivo", d.motivo, "motivo");
+    if (d.patente && $("#i-tiene-vehiculo") && !$("#i-tiene-vehiculo").checked) {
+      $("#i-tiene-vehiculo").checked = true;
+      $("#zona-vehiculo").hidden = false;
+      poner("#i-patente", d.patente, "patente");
+      poner("#i-vtipo", d.vehiculo_tipo, null);
+      poner("#i-vdet", d.vehiculo_detalle, null);
+      if (d.acompanantes && $("#i-acomp")) $("#i-acomp").value = d.acompanantes;
+    }
+  }
+
+  let texto;
+  if (d && d.conocido && llenados.length) {
+    const origen = d.fuente === "trabajador"
+      ? "Es trabajador de la empresa"
+      : `Ya vino antes (última vez el ${fechaCorta(d.ultima_visita)})`;
+    texto = `${origen}. Se llenó: ${llenados.join(", ")}. Revíselo antes de registrar.`;
+    if (zona) zona.innerHTML = `<div class="aviso aviso--verde">${esc(texto)}</div>`;
+    recado("Cédula leída y datos llenados.");
+    const vacio = ["#i-nombre", "#i-empresa", "#i-visita", "#i-motivo"]
+      .map((id) => $(id)).find((el) => el && !String(el.value).trim());
+    if (vacio) vacio.focus();
+  } else {
+    texto = "Primera vez que entra: la cédula no trae el nombre en el código, escríbalo.";
+    if (zona) zona.innerHTML = `<div class="aviso aviso--ambar">${esc(texto)}</div>`;
+    recado("Cédula leída. Falta el nombre.");
+    $("#i-nombre") && $("#i-nombre").focus();
+  }
+}
+
+/** `2031-05-20` -> `20-05-2031`. */
+function fechaCorta(iso) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(iso || "") ? iso.split("-").reverse().join("-") : (iso || "");
 }
 
 /* Lee el código de la cédula para MOSTRARLO.

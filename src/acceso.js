@@ -195,6 +195,72 @@ function numeroONulo(v, min, max) {
 }
 
 /**
+ * Lo que ya se sabe de una persona por su RUN, para llenar el formulario.
+ *
+ * El código de la cédula trae el RUN, la serie y las fechas de nacimiento y de
+ * vencimiento, y **nada más**: el nombre no viene en el QR. Por eso, apenas se
+ * lee una cédula (o se escribe un RUN), se busca a la persona en lo que la
+ * base ya tiene:
+ *
+ *  1. Si es un trabajador de la empresa, su nombre sale de `trabajadores`.
+ *  2. Si ya vino antes, sale de su último acceso que todavía no se haya
+ *     anonimizado: nombre y empresa de cualquier instalación, y a quién vino a
+ *     ver, a qué y en qué vehículo solo si fue **a esta misma instalación**,
+ *     que es donde esos datos sirven y donde el guardia ya los conoce.
+ *
+ * Es una sugerencia: la página llena solo los campos vacíos y el guardia los
+ * revisa antes de registrar. Lo que se guarda es lo que quede escrito.
+ */
+export async function conocido(env, p) {
+  const run = normalizarRut(p.get('run'));
+  if (!run) return { error: 'Ese RUN no se puede leer', status: 400 };
+  const inst = Number(p.get('instalacion'));
+
+  const r = { run, conocido: false, fuente: null };
+
+  const trab = await primero(env,
+    `trabajadores?select=nombre,cargo&rut=eq.${run}&limit=1`).catch(() => null);
+  if (trab && trab.nombre) {
+    Object.assign(r, {
+      conocido: true, fuente: 'trabajador', nombre: trab.nombre,
+      empresa: 'Seguridad Garridos', cargo: trab.cargo || null,
+    });
+  }
+
+  const previos = await buscar(env,
+    'accesos?select=nombre,empresa,motivo,a_quien_visita,patente,vehiculo_tipo,' +
+    `vehiculo_detalle,acompanantes,fecha,instalacion_id&run=eq.${run}` +
+    '&anonimizado_en=is.null&order=entrada_en.desc&limit=20').catch(() => []);
+
+  if (previos.length) {
+    const ultimo = previos[0];
+    const conNombre = previos.find((f) => f.nombre);
+    const conEmpresa = previos.find((f) => f.empresa);
+    if (!r.nombre && conNombre) r.nombre = conNombre.nombre;
+    if (!r.empresa && conEmpresa) r.empresa = conEmpresa.empresa;
+    r.conocido = true;
+    r.fuente = r.fuente || 'visita';
+    r.ultima_visita = ultimo.fecha;
+    r.visitas = previos.length;
+
+    const aca = Number.isInteger(inst) && inst > 0
+      ? previos.find((f) => Number(f.instalacion_id) === inst) : null;
+    if (aca) {
+      Object.assign(r, {
+        a_quien_visita: aca.a_quien_visita || null,
+        motivo: aca.motivo || null,
+        patente: aca.patente || null,
+        vehiculo_tipo: aca.vehiculo_tipo || null,
+        vehiculo_detalle: aca.vehiculo_detalle || null,
+        acompanantes: aca.acompanantes || 0,
+        ultima_visita_aca: aca.fecha,
+      });
+    }
+  }
+  return r;
+}
+
+/**
  * Marca la salida.
  *
  * Es lo único que se escribe sobre una fila ya creada, y se escribe una sola

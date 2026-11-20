@@ -90,6 +90,15 @@ https://portal.sidiv.registrocivil.cl/docstatus
   página ajena que no contesta.
 - **El vencimiento es lo que hace que valga la pena leerlo**: deja ver en el
   momento que el carnet está vencido, que a ojo no se nota.
+- **El QR no trae el nombre.** Por eso, apenas se lee la cédula (o se
+  escribe un RUN a mano y se sale del campo), la página pregunta a
+  `GET /api/accesos/conocido?run=…&instalacion=…` lo que la base ya sabe de
+  ese RUN: si es trabajador de la empresa, su nombre; si ya entró antes, el
+  nombre y la empresa de su último acceso no anonimizado y, si fue a esta
+  misma instalación, a quién vino a ver, el motivo y el vehículo. Se llenan
+  solo los campos vacíos y la pantalla dice de dónde salió cada dato. La
+  primera visita de alguien que no es trabajador sigue pidiendo el nombre a
+  mano: ese dato no está en el documento.
 - Las cédulas viejas (2002) traen un PDF417 en el reverso, que es otro formato
   y muy difícil de leer con la cámara de un teléfono. Para ésas **se escribe el
   RUN a mano**, que es un camino que siempre tiene que estar abierto.

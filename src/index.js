@@ -274,6 +274,10 @@ async function api(request, env, url, quien) {
   if (ruta === '/accesos' && metodo === 'GET') {
     return json(await acc.listar(env, p));
   }
+  if (ruta === '/accesos/conocido' && metodo === 'GET') {
+    const r = await acc.conocido(env, p);
+    return r.error ? error(r.error, r.status) : json(r);
+  }
   if (ruta === '/accesos' && metodo === 'POST') {
     const r = await acc.registrarIngreso(env, cuerpo, quien);
     return r.error ? error(r.error, r.status) : json(r, 201);
