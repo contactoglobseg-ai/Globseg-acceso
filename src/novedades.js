@@ -11,7 +11,7 @@
  * que poder elegir.
  */
 
-import { buscar, primero, insertar, anotar } from './datos.js';
+import { ErrorDatos, buscar, primero, insertar, anotar } from './datos.js';
 import { fechaChile, esFecha } from './fechas.js';
 import { subirFoto, leerFoto, CARPETA_NOVEDADES } from './almacen.js';
 
@@ -34,6 +34,25 @@ export const GLOSA_CATEGORIA = {
 const TEXTO_SIN_COMPLEJIDADES = 'Turno realizado sin complejidades que informar.';
 
 const LARGO_TEXTO = 4000;
+
+// Una novedad guardada sin señal tiene un mes para llegar. Más que eso ya no
+// es un atraso de señal, y se rechaza con el motivo para que alguien lo vea.
+const MAX_DIAS_ATRASO = 30;
+const UID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** ¿Ya se aplicó 20261123140000_novedades_sin_senal.sql? Mismo criterio que
+ *  columnasFotoListas(): sin ella, el libro funciona como antes. */
+let columnasColaOk = false;
+export async function columnasColaListas(env) {
+  if (columnasColaOk) return true;
+  try {
+    await buscar(env, 'novedades?select=uid,escrita_en&limit=1');
+    columnasColaOk = true;
+  } catch {
+    return false;
+  }
+  return true;
+}
 
 // La foto llega desde el teléfono ya reducida a 800 px (unos 100 KB). El tope
 // es holgado a propósito: lo que se quiere frenar es un archivo que no es una
@@ -82,6 +101,19 @@ function bytesDeFoto(dataUrl) {
  * vieja: la deja igual y la marca como corregida desde la vista.
  */
 export async function escribir(env, cuerpo, quien) {
+  // Las que vienen de la cola del teléfono traen su código. Si ya llegó (el
+  // envío anterior se cortó después de escribir), se contesta lo mismo que
+  // la primera vez y no se escribe de nuevo.
+  const cola = await columnasColaListas(env);
+  const uid = cola && UID.test(String(cuerpo.uid || '')) ? String(cuerpo.uid).toLowerCase() : null;
+  if (uid) {
+    const previa = await primero(env, `v_novedades?select=*&uid=eq.${uid}`);
+    if (previa) {
+      if (previa.quien !== quien.usuario) return { error: 'Ese código ya lo usó otra cuenta', status: 409 };
+      return { novedad: previa, aviso: null, repetida: true };
+    }
+  }
+
   let texto = String(cuerpo.texto ?? '').trim();
   if (!texto && cuerpo.categoria === 'sin_complejidades') texto = TEXTO_SIN_COMPLEJIDADES;
   if (!texto) return { error: 'Escriba la novedad', status: 400 };
@@ -112,7 +144,19 @@ export async function escribir(env, cuerpo, quien) {
   }
 
   const ahora = new Date();
-  const fecha = fechaChile(ahora);
+
+  // La hora del teléfono, si la novedad se escribió sin señal. `cuando` sigue
+  // siendo la del servidor; el día del libro es el día en que se escribió.
+  let escrita = null;
+  if (cola && cuerpo.escrita_en) {
+    escrita = new Date(String(cuerpo.escrita_en));
+    if (Number.isNaN(escrita.getTime())) escrita = null;
+    else if (escrita.getTime() > ahora.getTime() + 10 * 60 * 1000) escrita = ahora;   // reloj adelantado
+    else if (ahora.getTime() - escrita.getTime() > MAX_DIAS_ATRASO * 864e5) {
+      return { error: `Esta novedad lleva más de ${MAX_DIAS_ATRASO} días sin enviarse. Avise a la oficina.`, status: 422 };
+    }
+  }
+  const fecha = fechaChile(escrita || ahora);
 
   // La foto, si viene. Se sube ANTES de escribir la anotación para que la
   // anotación nunca apunte a una foto que no está. Si algo falla con la foto,
@@ -127,7 +171,8 @@ export async function escribir(env, cuerpo, quien) {
       aviso = 'La novedad quedó anotada, pero SIN la foto: falta aplicar en Supabase ' +
               'la migración 20261123120000_novedades_fotos.sql.';
     } else {
-      const ruta = `${instalacionId}/${fecha}/${crypto.randomUUID()}.jpg`;
+      // Con el código de la novedad en la ruta, un reintento sube la misma foto.
+      const ruta = `${instalacionId}/${fecha}/${uid || crypto.randomUUID()}.jpg`;
       try {
         await subirFoto(env, CARPETA_NOVEDADES, ruta, foto.bytes);
         extra.foto_ruta = ruta;
@@ -138,25 +183,38 @@ export async function escribir(env, cuerpo, quien) {
       }
     }
   }
+  if (uid) extra.uid = uid;
+  if (escrita) extra.escrita_en = escrita.toISOString();
   if (await columnasFotoListas(env)) {
     const exactitud = numeroONulo(cuerpo.exactitud_m, 0, 1e6);
     if (exactitud !== null) extra.exactitud_m = Math.round(exactitud);
   }
 
-  const [fila] = await insertar(env, 'novedades', {
-    instalacion_id: instalacionId,
-    trabajador_id: quien.trabajador_id ?? null,
-    quien: quien.usuario,
-    quien_nombre: quien.nombre,
-    cuando: ahora.toISOString(),
-    fecha,
-    categoria,
-    texto,
-    lat: numeroONulo(cuerpo.lat, -90, 90),
-    lon: numeroONulo(cuerpo.lon, -180, 180),
-    corrige_id: corrigeId,
-    ...extra,
-  });
+  let fila;
+  try {
+    [fila] = await insertar(env, 'novedades', {
+      instalacion_id: instalacionId,
+      trabajador_id: quien.trabajador_id ?? null,
+      quien: quien.usuario,
+      quien_nombre: quien.nombre,
+      cuando: ahora.toISOString(),
+      fecha,
+      categoria,
+      texto,
+      lat: numeroONulo(cuerpo.lat, -90, 90),
+      lon: numeroONulo(cuerpo.lon, -180, 180),
+      corrige_id: corrigeId,
+      ...extra,
+    });
+  } catch (e) {
+    // Dos envíos del mismo código casi al mismo tiempo: el segundo choca con
+    // la clave única y se contesta con lo que dejó el primero.
+    if (uid && e instanceof ErrorDatos && e.detalle?.code === '23505') {
+      const ya = await primero(env, `v_novedades?select=*&uid=eq.${uid}`);
+      if (ya) return { novedad: ya, aviso: null, repetida: true };
+    }
+    throw e;
+  }
 
   await anotar(env, quien.usuario, 'novedad', fila.id,
     corrigeId ? 'corrigió una novedad' : 'escribió una novedad',

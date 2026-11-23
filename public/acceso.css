@@ -469,6 +469,10 @@ input[type=checkbox]{
 .tarjRev__cuerpo a{color:var(--acento)}
 .tarjRev__turno{margin-top:.5rem;padding-top:.5rem;border-top:1px dashed var(--borde);font-size:.8rem;color:var(--texto-2)}
 
+/* El aviso de instalar como app, bajo el encabezado. */
+.avisoInstalar{display:flex;align-items:center;gap:.6rem;max-width:52rem;margin:.6rem auto 0;width:calc(100% - 1.6rem)}
+.avisoInstalar span{flex:1}
+
 /* ================================================= respeto por el sistema */
 @media (prefers-reduced-motion:reduce){
   *,*::before,*::after{

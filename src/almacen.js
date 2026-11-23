@@ -40,6 +40,10 @@ export async function subirFoto(env, carpeta, ruta, bytes) {
   if (r.ok) return;
   let datos = null;
   try { datos = JSON.parse(await r.text()); } catch { /* sin cuerpo */ }
+  // Ya estaba: es un reintento desde la cola del teléfono, y la ruta lleva el
+  // código de la novedad, así que la foto es la misma. No es un error.
+  if (r.status === 409 || String(datos?.statusCode) === '409' ||
+      /duplicate|already exists/i.test(datos?.error || datos?.message || '')) return;
   throw new ErrorDatos(
     `La carpeta de fotos respondió ${r.status}${datos?.message ? ': ' + datos.message : ''}`,
     r.status, datos);

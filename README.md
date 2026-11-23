@@ -39,6 +39,19 @@ Después de cada push que traiga migración, mirar
 `https://acceso.seggarridos.com/api/diagnostico`: responde sí/no por tabla sin
 mostrar ningún valor.
 
+### App instalable y novedades sin señal
+`public/manifest.json` y `public/sw.js` permiten instalar la página como app
+(Android: botón «Instalar»; iPhone: Compartir → Agregar a pantalla de inicio)
+y que abra sin señal. El service worker guarda **solo la pantalla**, nunca
+nada de `/api/`. **Al cambiar cualquier archivo de `public/`, subir
+`VERSION` en `sw.js`.**
+
+Las novedades del formulario rápido se guardan primero en el teléfono
+(IndexedDB) y se envían cuando hay señal. Cada una lleva `uid` (reintentar no
+la duplica) y `escrita_en` (la hora del teléfono; `cuando` sigue siendo la del
+servidor). Migración `20261123140000_novedades_sin_senal.sql`. Turno, eventos
+con firma y accesos siguen necesitando señal.
+
 ### La pestaña Revisión
 Muestra las novedades de todas las instalaciones con foto, mapa y quién
 marcó turno ese día. La ven solo las cuentas de `REVISION_USUARIOS` en

@@ -234,6 +234,8 @@ async function revisarTablas(env) {
   // Las fotos de las novedades (migración 20261123120000_novedades_fotos.sql).
   // Si da false, el libro funciona igual pero las novedades se guardan sin foto.
   r.novedades_fotos = await nov.columnasFotoListas(env);
+  // La cola sin señal (20261123140000_novedades_sin_senal.sql).
+  r.novedades_sin_senal = await nov.columnasColaListas(env);
 
   // Las tres del resto del sistema de las que esta aplicación depende. Si
   // alguna diera false, el problema no es de acá: es que se apuntó a otra base.

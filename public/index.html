@@ -9,7 +9,13 @@
 <meta name="theme-color" content="#F5F5F7" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
 <link rel="icon" href="logo.png">
-<link rel="apple-touch-icon" href="logo.png">
+<!-- Para instalarla como app en el teléfono (ver sw.js). -->
+<link rel="manifest" href="/manifest.json">
+<link rel="apple-touch-icon" href="/iconos/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Acceso">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
 
 <!-- El tema, ANTES del primer pintado.
      Va inline y duplicado respecto de apariencia.js a propósito: un archivo
@@ -83,7 +89,9 @@ async function pedir(ruta, opciones) {
     r = await fetch("/api" + ruta, op);
   } catch (_) {
     // Esto es lo normal en un parque: se cayó la señal a mitad de la petición.
-    throw new Error("No hay conexión. Lo que escribió no se perdió: vuelva a intentar.");
+    const sinRed = new Error("No hay conexión. Lo que escribió no se perdió: vuelva a intentar.");
+    sinRed.sinRed = true;
+    throw sinRed;
   }
   let datos = null;
   try { datos = await r.json(); } catch (_) { /* respuesta sin cuerpo */ }
@@ -420,6 +428,10 @@ function abrirAjustes() {
 
     $("#b-cerrar-ajustes").onclick = cerrarCajon;
     $("#b-salir").onclick = async () => {
+      const pendientes = (await colaMias()).filter((n) => !n.rechazo).length;
+      if (pendientes && !confirm(`Hay ${pendientes} novedad${pendientes === 1 ? "" : "es"} sin enviar en este teléfono. ` +
+          "Salen cuando vuelva a entrar con esta misma cuenta. ¿Cerrar sesión igual?")) return;
+      try { localStorage.removeItem("acceso.yo"); } catch (_) {}
       await pedir("/sesion", { method: "DELETE" }).catch(() => {});
       ESTADO.usuario = null;
       cerrarCajon();
@@ -949,6 +961,99 @@ function dvEnPantalla(rut) {
   return dv === (resto === 11 ? "0" : resto === 10 ? "K" : String(resto));
 }
 
+// ================================================ la cola sin señal
+/* Las novedades del formulario rápido se guardan PRIMERO en el teléfono y
+ * después se envían. Si no hay señal, quedan «Por enviar» y salen solas
+ * cuando vuelve la conexión. Cada una lleva un código (`uid`) que pone el
+ * teléfono una sola vez: si el envío se corta y se reintenta, el servidor la
+ * reconoce y no la escribe dos veces. La hora del teléfono va en
+ * `escrita_en`; la del servidor la sigue poniendo el servidor.
+ *
+ * Se guardan en IndexedDB y no en localStorage porque una foto no cabe en el
+ * cupo de localStorage. Nombres con prefijo `cola` (ver la cabecera). */
+let colaEnviando = false;
+
+function colaAbrir() {
+  return new Promise((listo, falla) => {
+    const r = indexedDB.open("acceso-cola", 1);
+    r.onupgradeneeded = () => r.result.createObjectStore("novedades", { keyPath: "uid" });
+    r.onsuccess = () => listo(r.result);
+    r.onerror = () => falla(r.error);
+  });
+}
+async function colaTx(modo, fn) {
+  const db = await colaAbrir();
+  return new Promise((listo, falla) => {
+    const tx = db.transaction("novedades", modo);
+    const pedido = fn(tx.objectStore("novedades"));
+    tx.oncomplete = () => listo(pedido ? pedido.result : undefined);
+    tx.onerror = () => falla(tx.error);
+  });
+}
+const colaPoner = (n) => colaTx("readwrite", (st) => st.put(n));
+const colaQuitar = (uid) => colaTx("readwrite", (st) => st.delete(uid));
+/** Las de la cuenta que tiene la sesión: en un teléfono compartido, las de
+ *  otro guardia esperan a que él vuelva a entrar. */
+async function colaMias() {
+  if (!ESTADO.usuario) return [];
+  try {
+    return (await colaTx("readonly", (st) => st.getAll()))
+      .filter((n) => n.usuario === ESTADO.usuario.usuario)
+      .sort((a, b) => a.escrita_en.localeCompare(b.escrita_en));
+  } catch (_) { return []; }   // navegador sin IndexedDB (ventana privada antigua)
+}
+
+/** Envía lo pendiente, de la más antigua a la más nueva. Nunca lanza. */
+async function colaEnviar() {
+  if (colaEnviando || !ESTADO.usuario || !navigator.onLine) return;
+  colaEnviando = true;
+  let enviadas = 0, rechazadas = 0, sesionVencida = false, quedan = false;
+  try {
+    for (const n of (await colaMias()).filter((x) => !x.rechazo)) {
+      let r, datos = null;
+      try {
+        r = await fetch("/api/novedades", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            uid: n.uid, escrita_en: n.escrita_en, instalacion_id: n.instalacion_id,
+            categoria: n.categoria, texto: n.texto, lat: n.lat, lon: n.lon,
+            exactitud_m: n.exactitud_m, foto: n.foto || undefined,
+          }),
+        });
+        try { datos = await r.json(); } catch (_) {}
+      } catch (_) { quedan = true; break; }           // se cortó la señal: después
+      if (r.ok) {
+        await colaQuitar(n.uid);
+        enviadas++;
+        if (datos && datos.aviso) recado(datos.aviso, true);
+        continue;
+      }
+      if (r.status === 401) { sesionVencida = true; break; }
+      if (r.status >= 400 && r.status < 500 && r.status !== 408 && r.status !== 429) {
+        // El servidor la rechazó con un motivo: no se reintenta, se muestra.
+        n.rechazo = (datos && datos.error) || ("El servidor respondió " + r.status);
+        await colaPoner(n);
+        rechazadas++;
+        continue;
+      }
+      quedan = true; break;                            // 5xx: después
+    }
+  } finally { colaEnviando = false; }
+
+  if (sesionVencida) {
+    recado("Su sesión venció. Entre de nuevo: lo que quedó por enviar sale al entrar.", true);
+    ESTADO.usuario = null; pintar(); return;
+  }
+  if (enviadas) recado(enviadas === 1 ? "Novedad enviada." : `${enviadas} novedades enviadas.`);
+  else if (quedan) recado("Sin conexión con el servidor: lo guardado sale solo cuando vuelva la señal.", true);
+  // Se repinta solo si algo cambió, no cada vez que el teléfono vuelve a la app.
+  if ((enviadas || rechazadas) && $("#zona-novedades")) await refrescarNovedades();
+}
+
+addEventListener("online", () => colaEnviar());
+document.addEventListener("visibilitychange", () => { if (!document.hidden) colaEnviar(); });
+
 // ======================================================== vista: novedades
 /* Novedades y eventos van en una sola pestaña. Arriba, el formulario rápido:
  * tipo (Novedad o Incidente), observación, ubicación con su precisión y una
@@ -1064,26 +1169,34 @@ function conectarNovedadRapida() {
       const categoria = novTipoElegido();
       // La foto tiene que ir con la calidad del tipo que se está enviando.
       if (novArchivo && novFotoTipo !== categoria) await novProcesarFoto();
+      const inst = ESTADO.instalaciones.find((i) => String(i.id) === String(ESTADO.instalacion));
+      const nueva = {
+        uid: crypto.randomUUID(),
+        usuario: ESTADO.usuario.usuario,
+        escrita_en: new Date().toISOString(),
+        instalacion_id: ESTADO.instalacion,
+        instalacion: inst ? inst.nombre : "",
+        categoria,
+        texto,
+        lat: novPos ? novPos.lat : null,
+        lon: novPos ? novPos.lon : null,
+        exactitud_m: novPos ? novPos.prec : null,
+        foto: novFoto || null,
+        rechazo: null,
+      };
       try {
-        const r = await pedir("/novedades", {
-          cuerpo: {
-            instalacion_id: ESTADO.instalacion,
-            categoria,
-            texto,
-            lat: novPos ? novPos.lat : undefined,
-            lon: novPos ? novPos.lon : undefined,
-            exactitud_m: novPos ? novPos.prec : undefined,
-            foto: novFoto || undefined,
-          },
-        });
-        $("#nov-texto").value = "";
-        novQuitarFoto();
-        $("#nt-novedad").checked = true;
-        $("#nov-texto").placeholder = "Qué pasó, quién, dónde (breve)";
-        if (r.aviso) recado(r.aviso, true);
-        else recado(novPos ? "Anotado en el libro, con ubicación." : "Anotado en el libro, SIN ubicación.", !novPos);
-        await refrescarNovedades();
-      } catch (e) { recado(e.message, true); }
+        await colaPoner(nueva);
+      } catch (e) {
+        recado("No se pudo guardar en el teléfono: " + (e && e.message ? e.message : "error"), true);
+        return;
+      }
+      $("#nov-texto").value = "";
+      novQuitarFoto();
+      $("#nt-novedad").checked = true;
+      $("#nov-texto").placeholder = "Qué pasó, quién, dónde (breve)";
+      recado(navigator.onLine ? "Guardada. Enviando…" : "Guardada en el teléfono. Sale sola cuando vuelva la señal.", !navigator.onLine);
+      await refrescarNovedades();
+      await colaEnviar();
     });
   };
 }
@@ -1187,18 +1300,29 @@ function novQuitarFoto() {
 async function refrescarNovedades() {
   const zona = $("#zona-novedades");
   if (!zona) return;
+  const pendientes = (await colaMias()).filter((n) => String(n.instalacion_id) === String(ESTADO.instalacion));
+  const bloquePendientes = pendientes.length ? `
+    <h2 style="margin:1.1rem 0 .5rem">Por enviar
+      <span class="sello sello--ambar">${pendientes.length}</span>
+    </h2>
+    <ul class="lista">${pendientes.slice().reverse().map(filaPendiente).join("")}</ul>
+    <button class="bt bt--ancho" id="b-enviar-cola" style="margin-top:.5rem">Enviar ahora</button>` : "";
+
   let r;
   try {
     r = await pedir(`/novedades?instalacion=${ESTADO.instalacion}&desde=${fechaHoy()}`);
   } catch (e) {
-    zona.innerHTML = `<div class="aviso aviso--rojo">${esc(e.message)}</div>`;
+    zona.innerHTML = bloquePendientes + `<div class="aviso ${e.sinRed ? "aviso--ambar" : "aviso--rojo"}" style="margin-top:.8rem">${
+      e.sinRed ? "Sin señal: se muestran solo las que esperan en este teléfono. Lo que escriba se guarda y sale solo cuando vuelva la conexión."
+               : esc(e.message)}</div>`;
+    conectarPendientes(zona);
     return;
   }
 
   // Qué anotación corrige a cuál, para poder marcarlas.
   const corregidas = new Set(r.novedades.filter((n) => n.corrige_id).map((n) => n.corrige_id));
 
-  zona.innerHTML = `
+  zona.innerHTML = bloquePendientes + `
     <h2 style="margin:1.1rem 0 .5rem">Hoy
       <span class="sello sello--gris">${r.novedades.length}</span>
     </h2>
@@ -1210,11 +1334,43 @@ async function refrescarNovedades() {
       escribiendo otra: las dos quedan a la vista, como en el libro de papel.
     </p>`;
 
-  zona.onclick = (ev) => {
+  conectarPendientes(zona);
+}
+
+function conectarPendientes(zona) {
+  const enviar = $("#b-enviar-cola");
+  if (enviar) enviar.onclick = () => ocupado(enviar, colaEnviar);
+  zona.onclick = async (ev) => {
     const b = ev.target.closest("button[data-corrige]");
-    if (b) abrirFormularioNovedad(b.dataset.corrige);
+    if (b) { abrirFormularioNovedad(b.dataset.corrige); return; }
+    const q = ev.target.closest("button[data-quitar-cola]");
+    if (q && confirm("¿Quitar del teléfono esta novedad rechazada? No se envió y se pierde.")) {
+      await colaQuitar(q.dataset.quitarCola);
+      await refrescarNovedades();
+    }
   };
 }
+
+/** Una novedad que todavía está en el teléfono. */
+function filaPendiente(n) {
+  return `<li class="item">
+    <div class="fila fila--entre">
+      <div class="crece">
+        <span class="sello ${n.rechazo ? "sello--rojo" : "sello--ambar"}">${n.rechazo ? "Rechazada" : "Por enviar"}</span>
+        <span class="sello sello--gris">${esc(ESTADO.categorias[n.categoria] || n.categoria)}</span>
+      </div>
+      <span class="cuando">${esc(hora(n.escrita_en))}</span>
+    </div>
+    <p style="margin:.4rem 0 .2rem;white-space:pre-wrap">${esc(n.texto || "Turno realizado sin complejidades que informar.")}</p>
+    <div class="detalle gris">${n.lat != null ? `Con ubicación (±${esc(n.exactitud_m)} m)` : "Sin ubicación"}${n.foto ? " · con foto" : ""}</div>
+    ${n.rechazo ? `<div class="aviso aviso--rojo" style="margin-top:.4rem">${esc(n.rechazo)}</div>
+      <button class="bt bt--rojo" data-quitar-cola="${esc(n.uid)}">Quitar del teléfono</button>` : ""}
+    ${n.foto ? `<img class="fotoNov__lista" src="${esc(n.foto)}" alt="Foto por enviar">` : ""}
+  </li>`;
+}
+
+/** ¿Se escribió sin señal y llegó más de una hora después? */
+const novConAtraso = (n) => !!n.escrita_en && (Date.parse(n.cuando) - Date.parse(n.escrita_en)) > 3600000;
 
 function filaNovedad(n, corregidas) {
   return `<li class="item">
@@ -1225,9 +1381,10 @@ function filaNovedad(n, corregidas) {
         </span>
         ${corregidas.has(n.id) ? '<span class="sello sello--gris">Corregida después</span>' : ""}
       </div>
-      <span class="cuando">${esc(hora(n.cuando))}</span>
+      <span class="cuando">${esc(hora(n.escrita_en || n.cuando))}</span>
     </div>
     <p style="margin:.4rem 0 .2rem;white-space:pre-wrap">${esc(n.texto)}</p>
+    ${novConAtraso(n) ? `<div class="detalle" style="color:var(--ambar)">Escrita sin señal a las ${esc(hora(n.escrita_en))}; llegó a las ${esc(hora(n.cuando))}.</div>` : ""}
     <div class="detalle gris">
       ${esc(n.quien_nombre)}
       ${n.corrige_id ? ` · corrige la anotación #${n.corrige_id}` : ""}
@@ -1743,7 +1900,8 @@ function revTarjeta(x) {
       <div><b>${esc(x.instalacion || "—")}</b>
         <span class="sello ${x.corrige_id ? "sello--ambar" : inc ? "sello--rojo" : ok ? "sello--verde" : "sello--cian"}">${esc(tipo)}</span></div>
       <div class="detalle">👤 ${esc(x.quien_nombre)}</div>
-      <div class="detalle">🕒 ${esc(fechaHora(x.cuando))}</div>
+      <div class="detalle">🕒 ${esc(fechaHora(x.escrita_en || x.cuando))}${novConAtraso(x)
+        ? ` <span style="color:var(--ambar)">· escrita sin señal, llegó ${esc(fechaHora(x.cuando))}</span>` : ""}</div>
       <p>${esc(x.texto)}</p>
       <div class="detalle">${x.lat != null
         ? `<a href="https://www.google.com/maps?q=${encodeURIComponent(x.lat + "," + x.lon)}" target="_blank" rel="noopener">📍 Ver en el mapa${x.exactitud_m != null ? ` (±${esc(x.exactitud_m)} m)` : ""}</a>`
@@ -1807,7 +1965,21 @@ function pintar() {
 }
 
 async function arrancarSesion() {
-  const r = await pedir("/yo");
+  // Sin señal, la pantalla abre con lo último que se supo de la cuenta, para
+  // poder dejar novedades en la cola. Con señal, siempre se pregunta.
+  let r;
+  try {
+    r = await pedir("/yo");
+    guardarLocal("yo", JSON.stringify(r));
+  } catch (e) {
+    const guardado = e.sinRed ? leerLocal("yo") : null;
+    if (!guardado) {
+      if (!e.sinRed) { try { localStorage.removeItem("acceso.yo"); } catch (_) {} }
+      throw e;
+    }
+    r = JSON.parse(guardado);
+    setTimeout(() => recado("Sin señal: puede escribir novedades y salen solas cuando vuelva la conexión.", true), 300);
+  }
   ESTADO.usuario = r.usuario;
   ESTADO.instalaciones = r.instalaciones || [];
   ESTADO.categorias = r.categorias || {};
@@ -1831,6 +2003,48 @@ async function arrancarSesion() {
 
   pintarMarco();
   pintar();
+  colaEnviar();
+  mostrarAvisoInstalar();
+}
+
+// ================================================== instalar como app
+/* El service worker (sw.js) es lo que permite instalarla y que abra sin
+ * señal. El aviso se muestra una vez por teléfono hasta que se instala o se
+ * cierra con la ×. En iPhone no hay botón de instalar: se explica el camino. */
+let instalarEvento = null;
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("/sw.js").catch((e) => console.warn("sw.js:", e));
+}
+addEventListener("beforeinstallprompt", (ev) => {
+  ev.preventDefault();
+  instalarEvento = ev;
+  mostrarAvisoInstalar();
+});
+addEventListener("appinstalled", () => { guardarLocal("instalada", "1"); const a = $("#aviso-instalar"); if (a) a.remove(); });
+
+function mostrarAvisoInstalar() {
+  const yaApp = matchMedia("(display-mode: standalone)").matches || navigator.standalone;
+  if (yaApp || leerLocal("aviso-instalar") === "cerrado" || $("#aviso-instalar") || !$("#hoja")) return;
+  const esIphone = /iphone|ipad|ipod/i.test(navigator.userAgent);
+  if (!esIphone && !instalarEvento) return;
+  const caja = document.createElement("div");
+  caja.id = "aviso-instalar";
+  caja.className = "aviso aviso--gris avisoInstalar";
+  caja.innerHTML = esIphone
+    ? `<span>Instálela en el iPhone: toque <b>Compartir</b> y luego <b>Agregar a pantalla de inicio</b>.</span>`
+    : `<span>Instale esta página como app en el teléfono.</span><button class="bt bt--fuerte" id="b-instalar">Instalar</button>`;
+  const cerrar = document.createElement("button");
+  cerrar.className = "bt bt--fantasma"; cerrar.setAttribute("aria-label", "Cerrar aviso"); cerrar.textContent = "×";
+  cerrar.onclick = () => { guardarLocal("aviso-instalar", "cerrado"); caja.remove(); };
+  caja.append(cerrar);
+  $("#hoja").before(caja);
+  const b = $("#b-instalar");
+  if (b) b.onclick = async () => {
+    if (!instalarEvento) return;
+    instalarEvento.prompt();
+    await instalarEvento.userChoice.catch(() => {});
+    instalarEvento = null; caja.remove();
+  };
 }
 
 (async function arrancar() {
