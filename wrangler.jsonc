@@ -24,7 +24,9 @@
   // una comparación que nadie ha necesitado; y tener secretos separados es
   // mejor, porque si uno se filtra el otro no queda expuesto.
   "vars": {
-    "SUPABASE_URL": "https://hjoljdjjsobweqbvlijr.supabase.co"
+    "SUPABASE_URL": "https://hjoljdjjsobweqbvlijr.supabase.co",
+    // Cuentas de oficina que ven la pestaña Revisión, separadas por coma.
+    "REVISION_USUARIOS": "vislaj"
   },
 
   "observability": { "enabled": true },

@@ -6,8 +6,9 @@ son papel:
 1. **Accesos** — quién y qué entra y sale de la instalación, leyendo el código
    de la cédula con la cámara o escribiendo el RUN a mano. El registro de
    vehículos es este mismo listado visto por el lado de los que traen patente.
-2. **Novedades** — el libro de novedades del turno: tipo (Novedad o
-   Incidente), observación, ubicación con su precisión y una foto opcional.
+2. **Novedades** — el libro de novedades del turno: tipo (Novedad,
+   Incidente o Sin complejidades, que es la foto de control de un turno sin
+   nada que contar y no exige observación), observación, ubicación con su precisión y una foto opcional.
    Al final de la misma pestaña está el **informe formal de evento especial**
    (una denuncia, un robo, un daño), firmado con el dedo, para cuando hay que
    entregar un documento firmado. Hasta el 22-11-2026 era una pestaña aparte.
@@ -37,6 +38,12 @@ reventar (`tablasListas()` en `src/index.js`).
 Después de cada push que traiga migración, mirar
 `https://acceso.seggarridos.com/api/diagnostico`: responde sí/no por tabla sin
 mostrar ningún valor.
+
+### La pestaña Revisión
+Muestra las novedades de todas las instalaciones con foto, mapa y quién
+marcó turno ese día. La ven solo las cuentas de `REVISION_USUARIOS` en
+`wrangler.jsonc` (separadas por coma). El servidor también lo exige: sin
+estar en esa lista, `/api/turno` y el listado sin instalación responden error.
 
 ### Las fotos de las novedades
 Se achican en el teléfono antes de enviarse, según el tipo

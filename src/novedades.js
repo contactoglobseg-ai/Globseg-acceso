@@ -15,7 +15,7 @@ import { buscar, primero, insertar, anotar } from './datos.js';
 import { fechaChile, esFecha } from './fechas.js';
 import { subirFoto, leerFoto, CARPETA_NOVEDADES } from './almacen.js';
 
-export const CATEGORIAS = ['novedad', 'ronda', 'incidencia', 'entrega_turno', 'otro'];
+export const CATEGORIAS = ['novedad', 'ronda', 'incidencia', 'entrega_turno', 'otro', 'sin_complejidades'];
 
 // Cómo se lee cada categoría en la pantalla. Vive acá y no en el HTML para que
 // el servidor pueda nombrarlas igual cuando rechaza algo.
@@ -25,7 +25,13 @@ export const GLOSA_CATEGORIA = {
   incidencia: 'Incidente',
   entrega_turno: 'Entrega de turno',
   otro: 'Otro',
+  sin_complejidades: 'Sin complejidades',
 };
+
+// «Sin complejidades» es la foto de control del turno: no hay nada que
+// contar, así que la observación no es obligatoria y, si viene vacía, se
+// escribe esta. La base exige texto en toda anotación.
+const TEXTO_SIN_COMPLEJIDADES = 'Turno realizado sin complejidades que informar.';
 
 const LARGO_TEXTO = 4000;
 
@@ -76,7 +82,8 @@ function bytesDeFoto(dataUrl) {
  * vieja: la deja igual y la marca como corregida desde la vista.
  */
 export async function escribir(env, cuerpo, quien) {
-  const texto = String(cuerpo.texto ?? '').trim();
+  let texto = String(cuerpo.texto ?? '').trim();
+  if (!texto && cuerpo.categoria === 'sin_complejidades') texto = TEXTO_SIN_COMPLEJIDADES;
   if (!texto) return { error: 'Escriba la novedad', status: 400 };
   if (texto.length > LARGO_TEXTO) {
     return { error: `La novedad no puede pasar de ${LARGO_TEXTO} caracteres`, status: 400 };

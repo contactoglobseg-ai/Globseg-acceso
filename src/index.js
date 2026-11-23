@@ -92,6 +92,16 @@ const faltaMigracion = () => error(
  */
 const PUEDE_ANULAR = ['gerencia', 'operaciones'];
 
+/**
+ * Quién ve la pestaña Revisión (las novedades de todas las instalaciones).
+ * Es una lista de cuentas de oficina, no un rol, porque hoy la revisa una
+ * sola persona. Vive en `wrangler.jsonc` (REVISION_USUARIOS, separados por
+ * coma): agregar a alguien es agregar su usuario ahí.
+ */
+const puedeRevisar = (env, usuario) =>
+  String(env.REVISION_USUARIOS || '').toLowerCase().split(',').map((x) => x.trim())
+    .filter(Boolean).includes(String(usuario || '').toLowerCase());
+
 async function identificar(request, env) {
   const guardia = await leerSesion(request, env, 'acceso');
   if (guardia) {
@@ -128,6 +138,7 @@ async function identificar(request, env) {
       instalacion_id: null,
       debe_cambiar_clave: u.debe_cambiar_clave,
       puede_anular: PUEDE_ANULAR.includes(u.rol),
+      puede_revisar: puedeRevisar(env, u.usuario),
     };
   }
   return null;
@@ -254,6 +265,7 @@ async function api(request, env, url, quien) {
       usuario: {
         usuario: quien.usuario, nombre: quien.nombre, tipo: quien.tipo,
         cargo: quien.cargo, puede_anular: quien.puede_anular,
+        puede_revisar: !!quien.puede_revisar,
         instalacion_id: quien.instalacion_id,
       },
       instalaciones,
@@ -290,6 +302,10 @@ async function api(request, env, url, quien) {
 
   // ----------------------------------------------------------- las novedades
   if (ruta === '/novedades' && metodo === 'GET') {
+    // Sin instalación son todas las instalaciones: eso es la revisión.
+    if (!p.get('instalacion') && !quien.puede_revisar) {
+      return error('Elija la instalación', 400);
+    }
     return json(await nov.listar(env, p));
   }
   if (ruta === '/novedades' && metodo === 'POST') {
@@ -298,7 +314,7 @@ async function api(request, env, url, quien) {
   }
   // El cruce con la asistencia para la revisión: solo la oficina.
   if (ruta === '/turno' && metodo === 'GET') {
-    if (quien.tipo !== 'oficina') return error('La revisión es para la oficina', 403);
+    if (!quien.puede_revisar) return error('La revisión no está habilitada para esta cuenta', 403);
     const r = await nov.turnoDelDia(env, p);
     return r.error ? error(r.error, r.status) : json(r);
   }

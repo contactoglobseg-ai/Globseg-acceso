@@ -194,7 +194,7 @@ const ICONOS = {
 const ROTULO = { accesos: "Accesos", novedades: "Novedades", turno: "Turno", eventos: "Eventos", revision: "Revisión" };
 
 /** Las pestañas que ve cada uno. La revisión es solo de la oficina. */
-const pestanasDe = (u) => ["accesos", "novedades", "turno"].concat(u && u.tipo === "oficina" ? ["revision"] : []);
+const pestanasDe = (u) => ["accesos", "novedades", "turno"].concat(u && u.puede_revisar ? ["revision"] : []);
 
 function icono(nombre) {
   return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
@@ -969,6 +969,7 @@ let novFotoTipo = null;     // con qué tipo se procesó novFoto
  * vez de ~100 KB, y los incidentes quedan con más detalle que antes. */
 const NOV_CALIDAD_FOTO = {
   novedad:    { ancho: 800,  calidad: 0.6 },   // ~50–70 KB
+  sin_complejidades: { ancho: 800, calidad: 0.6 },
   incidencia: { ancho: 1280, calidad: 0.7 },   // ~150–200 KB
 };
 const novTipoElegido = () =>
@@ -999,6 +1000,8 @@ function formularioNovedadRapida() {
         <label for="nt-novedad"><span class="tiposNov__ico" aria-hidden="true">⚠️</span>Novedad</label>
         <input type="radio" name="nov-tipo" id="nt-incidencia" value="incidencia">
         <label for="nt-incidencia"><span class="tiposNov__ico" aria-hidden="true">🚨</span>Incidente</label>
+        <input type="radio" name="nov-tipo" id="nt-sin" value="sin_complejidades">
+        <label for="nt-sin"><span class="tiposNov__ico" aria-hidden="true">✅</span>Sin complejidades</label>
       </div>
 
       <label for="nov-texto">Observación</label>
@@ -1036,7 +1039,12 @@ function conectarNovedadRapida() {
   // Si se cambia el tipo con la foto ya puesta, se vuelve a procesar con la
   // calidad que le corresponde al tipo nuevo.
   for (const r of document.querySelectorAll('input[name="nov-tipo"]')) {
-    r.onchange = () => { if (novArchivo) novProcesarFoto(); };
+    r.onchange = () => {
+      if (novArchivo) novProcesarFoto();
+      $("#nov-texto").placeholder = r.value === "sin_complejidades"
+        ? "Opcional. Si lo deja vacío: «Turno realizado sin complejidades que informar»."
+        : "Qué pasó, quién, dónde (breve)";
+    };
   }
   $("#nov-quitar").onclick = novQuitarFoto;
   // Si ya hay una ubicación de hace menos de dos minutos se muestra; si no, se pide.
@@ -1045,7 +1053,10 @@ function conectarNovedadRapida() {
   $("#f-nov-rapida").onsubmit = async (ev) => {
     ev.preventDefault();
     const texto = $("#nov-texto").value.trim();
-    if (!texto) { recado("Escriba la observación: qué pasó, quién, dónde.", true); $("#nov-texto").focus(); return; }
+    // «Sin complejidades» no pide observación: el servidor escribe la frase.
+    if (!texto && novTipoElegido() !== "sin_complejidades") {
+      recado("Escriba la observación: qué pasó, quién, dónde.", true); $("#nov-texto").focus(); return;
+    }
     const boton = $("#f-nov-rapida button[type=submit]");
     await ocupado(boton, async () => {
       // Si todavía no hay ubicación, se espera un poco más; sin ella se anota igual.
@@ -1068,6 +1079,7 @@ function conectarNovedadRapida() {
         $("#nov-texto").value = "";
         novQuitarFoto();
         $("#nt-novedad").checked = true;
+        $("#nov-texto").placeholder = "Qué pasó, quién, dónde (breve)";
         if (r.aviso) recado(r.aviso, true);
         else recado(novPos ? "Anotado en el libro, con ubicación." : "Anotado en el libro, SIN ubicación.", !novPos);
         await refrescarNovedades();
@@ -1208,7 +1220,7 @@ function filaNovedad(n, corregidas) {
   return `<li class="item">
     <div class="fila fila--entre">
       <div class="crece">
-        <span class="sello ${n.corrige_id ? "sello--ambar" : n.categoria === "incidencia" ? "sello--rojo" : "sello--cian"}">
+        <span class="sello ${n.corrige_id ? "sello--ambar" : n.categoria === "incidencia" ? "sello--rojo" : n.categoria === "sin_complejidades" ? "sello--verde" : "sello--cian"}">
           ${esc(n.corrige_id ? "Corrección" : (ESTADO.categorias[n.categoria] || n.categoria))}
         </span>
         ${corregidas.has(n.id) ? '<span class="sello sello--gris">Corregida después</span>' : ""}
@@ -1672,7 +1684,7 @@ let revNovedades = [];
 
 async function vistaRevision() {
   const hoja = $("#hoja");
-  if (ESTADO.usuario.tipo !== "oficina") { ESTADO.vista = "novedades"; return pintar(); }
+  if (!ESTADO.usuario.puede_revisar) { ESTADO.vista = "novedades"; return pintar(); }
   const hoy = fechaHoy();
   hoja.innerHTML = `
     <form class="caja filtrosRev" id="f-rev">
@@ -1683,7 +1695,7 @@ async function vistaRevision() {
       <div><label for="r-desde">Desde</label><input type="date" id="r-desde" value="${hoy}" max="${hoy}"></div>
       <div><label for="r-hasta">Hasta</label><input type="date" id="r-hasta" value="${hoy}" max="${hoy}"></div>
       <div><label for="r-tipo">Tipo</label>
-        <select id="r-tipo"><option value="">Todos</option><option value="novedad">Novedad</option><option value="incidencia">Incidente</option></select></div>
+        <select id="r-tipo"><option value="">Todos</option><option value="novedad">Novedad</option><option value="incidencia">Incidente</option><option value="sin_complejidades">Sin complejidades</option></select></div>
       <button class="bt bt--fuerte" type="submit">Ver</button>
       <button class="bt" type="button" id="r-csv">Exportar CSV</button>
     </form>
@@ -1707,6 +1719,7 @@ async function revCargar() {
   const n = (c) => revNovedades.filter((x) => x.categoria === c).length;
   $("#r-resumen").innerHTML = [
     ["Total", revNovedades.length], ["Incidentes", n("incidencia")], ["Novedades", n("novedad")],
+    ["Sin complejidades", n("sin_complejidades")],
     ["Con foto", revNovedades.filter((x) => x.foto_ruta).length],
     ["Sin ubicación", revNovedades.filter((x) => x.lat == null).length],
   ].map(([k, v]) => `<span>${k}: <b>${v}</b></span>`).join("") +
@@ -1720,14 +1733,15 @@ async function revCargar() {
 function revTarjeta(x) {
   const inc = x.categoria === "incidencia";
   const tipo = x.corrige_id ? "Corrección" : (ESTADO.categorias[x.categoria] || x.categoria);
-  return `<article class="tarjRev ${inc ? "tarjRev--inc" : ""}">
+  const ok = x.categoria === "sin_complejidades";
+  return `<article class="tarjRev ${inc ? "tarjRev--inc" : ok ? "tarjRev--ok" : ""}">
     ${x.foto_ruta
       ? `<a href="/api/novedades/${x.id}/foto" target="_blank" rel="noopener" title="Ver la foto completa">
            <img loading="lazy" src="/api/novedades/${x.id}/foto" alt="Foto de la novedad"></a>`
       : `<div class="tarjRev__sinfoto">Registro sin foto</div>`}
     <div class="tarjRev__cuerpo">
       <div><b>${esc(x.instalacion || "—")}</b>
-        <span class="sello ${x.corrige_id ? "sello--ambar" : inc ? "sello--rojo" : "sello--cian"}">${esc(tipo)}</span></div>
+        <span class="sello ${x.corrige_id ? "sello--ambar" : inc ? "sello--rojo" : ok ? "sello--verde" : "sello--cian"}">${esc(tipo)}</span></div>
       <div class="detalle">👤 ${esc(x.quien_nombre)}</div>
       <div class="detalle">🕒 ${esc(fechaHora(x.cuando))}</div>
       <p>${esc(x.texto)}</p>
