@@ -300,3 +300,54 @@ export async function pendientesDeAnonimizar(env, dias = DIAS_RETENCION) {
     `accesos?select=id&anonimizado_en=is.null&entrada_en=lt.${corte}&limit=1000`);
   return Array.isArray(filas) ? filas.length : 0;
 }
+
+/**
+ * ¿Ya entró antes? Para no hacer escribir todo de nuevo a quien viene seguido.
+ *
+ * Con el RUN (o la patente) se busca el último ingreso que todavía tenga sus
+ * datos —los anonimizados ya no los tienen— y se devuelve lo que sirve para
+ * rellenar el formulario. No se guarda nada nuevo: es reusar lo que el mismo
+ * libro ya tiene, y caduca con él (DIAS_RETENCION).
+ *
+ * Se busca en todas las instalaciones: el contratista que ayer entró a un
+ * parque hoy entra a otro. Además se dice si figura adentro ahora mismo, para
+ * que no quede registrado dos veces sin que nadie lo note.
+ */
+export async function conocido(env, p) {
+  const run = normalizarRut(p.get('run'));
+  const patente = normalizarPatente(p.get('patente'));
+  if (!run && !patente) return { error: 'Falta el RUN o la patente', status: 400 };
+
+  const campos = 'id,run,nombre,empresa,motivo,a_quien_visita,patente,vehiculo_tipo,' +
+                 'vehiculo_detalle,entrada_en,instalacion_id,instalacion,adentro';
+  const filtro = run ? `run=eq.${encodeURIComponent(run)}` : `patente=eq.${encodeURIComponent(patente)}`;
+  const base = `v_accesos?select=${campos}&${filtro}&anonimizado_en=is.null&order=entrada_en.desc`;
+
+  // El último con nombre (o con empresa, si se buscó por patente), que es el
+  // que de verdad ahorra escribir; y aparte, si hay uno abierto.
+  const conDatos = await primero(env, base + (run ? '&nombre=not.is.null' : ''));
+  const abierto = await primero(env, base + '&adentro=is.true');
+  if (!conDatos && !abierto) return { conocido: null };
+
+  const d = conDatos || abierto;
+  return {
+    conocido: {
+      por: run ? 'run' : 'patente',
+      // Por patente se devuelve el vehículo y la empresa, no la persona: el
+      // camión es el mismo, pero el que maneja cambia.
+      nombre: run ? d.nombre : null,
+      run: run ? d.run : null,
+      empresa: d.empresa,
+      motivo: d.motivo,
+      a_quien_visita: d.a_quien_visita,
+      patente: d.patente,
+      vehiculo_tipo: d.vehiculo_tipo,
+      vehiculo_detalle: d.vehiculo_detalle,
+      ultima_vez: d.entrada_en,
+      ultima_instalacion: d.instalacion,
+      adentro_ahora: abierto
+        ? { id: abierto.id, instalacion_id: abierto.instalacion_id, instalacion: abierto.instalacion, desde: abierto.entrada_en }
+        : null,
+    },
+  };
+}

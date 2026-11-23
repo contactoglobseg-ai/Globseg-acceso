@@ -39,6 +39,18 @@ Después de cada push que traiga migración, mirar
 `https://acceso.seggarridos.com/api/diagnostico`: responde sí/no por tabla sin
 mostrar ningún valor.
 
+### Registrar un ingreso rápido
+- «Registrar ingreso» abre la cámara de inmediato; con linterna donde el
+  navegador la ofrece (Chrome en Android; Safari de iPhone no).
+- El QR de la cédula trae el RUN pero **no el nombre**. Por eso, al leerlo (o
+  al escribir un RUN o una patente), `/api/accesos/conocido` busca el último
+  ingreso con datos de esa persona o vehículo, en cualquier instalación, y
+  rellena el formulario. Por patente se rellena el vehículo y la empresa,
+  nunca la persona. No guarda nada nuevo y caduca con los datos
+  (`DIAS_RETENCION`). También avisa si esa persona figura adentro ahora.
+- «Volvió a entrar» en «Ya salieron hoy» abre el formulario con los datos de
+  ese ingreso.
+
 ### App instalable y novedades sin señal
 `public/manifest.json` y `public/sw.js` permiten instalar la página como app
 (Android: botón «Instalar»; iPhone: Compartir → Agregar a pantalla de inicio)

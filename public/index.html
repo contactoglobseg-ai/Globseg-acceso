@@ -496,7 +496,7 @@ async function vistaAccesos() {
   conectarSelectorInstalacion();
   if (!ESTADO.instalacion) return;
 
-  $("#b-ingreso").onclick = abrirFormularioIngreso;
+  $("#b-ingreso").onclick = () => abrirFormularioIngreso(null);
   await refrescarAccesos();
 }
 
@@ -523,6 +523,8 @@ async function refrescarAccesos() {
   // Lo de hoy que ya salió: va debajo y plegado, porque lo que se mira todo el
   // turno es quién sigue adentro.
   const salidos = hoy.accesos.filter((a) => !a.adentro);
+  // Para «Volvió a entrar»: los datos de cada fila, a mano, sin volver a pedirlos.
+  accesosPorId = Object.fromEntries(hoy.accesos.concat(dentro.accesos).map((a) => [String(a.id), a]));
 
   zona.innerHTML = `
     <h2 style="margin:1.1rem 0 .5rem">Adentro ahora
@@ -541,6 +543,8 @@ async function refrescarAccesos() {
     ${hoy.tope_alcanzado ? `<p class="chico gris">Se muestran los primeros registros del día.</p>` : ""}`;
 
   zona.onclick = async (ev) => {
+    const re = ev.target.closest("button[data-reingreso]");
+    if (re) { abrirFormularioIngreso(accesosPorId[re.dataset.reingreso] || null); return; }
     const b = ev.target.closest("button[data-salida]");
     if (!b) return;
     const id = b.dataset.salida;
@@ -589,18 +593,26 @@ function filaAcceso(a) {
            <button class="bt bt--ancho" data-salida="${a.id}" data-quien="${esc(titulo)}">Marcar salida</button>
          </div>`
       : `<div class="detalle gris">${a.horas != null ? esc(a.horas) + " h adentro" : ""}
-           ${a.salida_por_nombre ? "· salida por " + esc(a.salida_por_nombre) : ""}</div>`}
+           ${a.salida_por_nombre ? "· salida por " + esc(a.salida_por_nombre) : ""}</div>
+         ${a.anonimizado_en ? "" : `<div style="margin-top:.55rem">
+           <button class="bt bt--ancho" data-reingreso="${a.id}">Volvió a entrar</button></div>`}`}
   </li>`;
 }
 
 // ------------------------------------------------- registrar un ingreso
-function abrirFormularioIngreso() {
-  abrirCajon("Registrar ingreso", `
+let accesosPorId = {};
+
+/* `previo`: los datos de un ingreso anterior («Volvió a entrar»). Sin él, el
+ * formulario abre con la cámara ya prendida: lo normal es escanear, y cada
+ * toque de más se nota cuando hay una fila de camiones en el portón. */
+function abrirFormularioIngreso(previo) {
+  abrirCajon(previo ? "Volvió a entrar" : "Registrar ingreso", `
     <div id="zona-escaner"></div>
     <button class="bt bt--ancho" id="b-escanear" style="margin-bottom:.8rem">
       Escanear el código de la cédula
     </button>
     <div id="aviso-cedula"></div>
+    <div id="aviso-conocido"></div>
 
     <form id="f-ingreso">
       <div class="dosColumnas">
@@ -684,7 +696,81 @@ function abrirFormularioIngreso() {
     // El cajón puede cerrarse con la cámara prendida: hay que apagarla o el
     // teléfono se queda con la luz del lente encendida y la batería corriendo.
     alCerrarCajon = apagarEscaner;
+    qrCrudo = null;
+
+    // Escrito a mano: al terminar un RUN válido o una patente, se busca si ya
+    // entró antes. Por patente solo se rellena el vehículo y la empresa.
+    $("#i-run").addEventListener("change", () => {
+      const run = $("#i-run").value.toUpperCase().replace(/[^0-9K]/g, "");
+      if (/^[0-9]{6,9}[0-9K]$/.test(run)) buscarConocido({ run });
+    });
+    $("#i-patente").addEventListener("change", () => {
+      const pat = $("#i-patente").value.toUpperCase().replace(/[^A-Z0-9]/g, "");
+      if (pat.length >= 5) buscarConocido({ patente: pat });
+    });
+
+    if (previo) {
+      rellenarIngreso(previo, true);
+      $("#aviso-conocido").innerHTML = `<div class="aviso aviso--verde">
+        Datos del ingreso de las ${esc(hora(previo.entrada_en))}. Revíselos y toque
+        <b>Registrar ingreso</b>.</div>`;
+      $("#f-ingreso button[type=submit]").focus();
+    } else {
+      abrirEscaner();
+    }
   });
+}
+
+/** Pone en el formulario los datos de un ingreso anterior. Sin `todo`, solo
+ *  llena lo que está vacío: lo que el guardia ya escribió no se pisa. */
+function rellenarIngreso(d, todo) {
+  const poner = (id, v) => {
+    const c = $(id);
+    if (c && v != null && v !== "" && (todo || !c.value)) c.value = v;
+  };
+  if (d.run) poner("#i-run", rutLindo(d.run));
+  poner("#i-nombre", d.nombre);
+  poner("#i-empresa", d.empresa);
+  poner("#i-visita", d.a_quien_visita);
+  poner("#i-motivo", d.motivo);
+  if (d.patente) {
+    $("#i-tiene-vehiculo").checked = true;
+    $("#zona-vehiculo").hidden = false;
+    poner("#i-patente", d.patente);
+    poner("#i-vtipo", d.vehiculo_tipo);
+    poner("#i-vdet", d.vehiculo_detalle);
+  }
+}
+
+/** ¿Ya entró antes? Si sí, rellena y lo dice. Si no hay señal o no se sabe,
+ *  no pasa nada: se escribe a mano como siempre. */
+async function buscarConocido(clave) {
+  const caja = $("#aviso-conocido");
+  let r;
+  try { r = await pedir("/accesos/conocido?" + new URLSearchParams(clave)); }
+  catch (_) { return null; }
+  if (!$("#f-ingreso")) return null;            // se cerró el formulario mientras tanto
+  const c = r.conocido;
+  if (!c) {
+    if (clave.run && caja) caja.innerHTML = "";
+    if (clave.run && !$("#i-nombre").value) { $("#i-nombre").focus(); recado("Primera vez que entra: escriba el nombre."); }
+    return null;
+  }
+  rellenarIngreso(c, false);
+  const quien = c.por === "run" ? (c.nombre || rutLindo(c.run)) : `El vehículo ${c.patente}`;
+  const avisos = [`<b>${esc(quien)}</b> ya entró antes: ${esc(fechaHora(c.ultima_vez))}` +
+    `${c.ultima_instalacion ? " en " + esc(c.ultima_instalacion) : ""}. Revise los datos y toque <b>Registrar ingreso</b>.`];
+  let ambar = false;
+  if (c.adentro_ahora) {
+    ambar = true;
+    avisos.push(String(c.adentro_ahora.instalacion_id) === String(ESTADO.instalacion)
+      ? `Ojo: figura <b>adentro de esta instalación</b> desde las ${esc(hora(c.adentro_ahora.desde))}. Si salió y no se marcó, márquele la salida en la lista.`
+      : `Ojo: figura adentro de <b>${esc(c.adentro_ahora.instalacion)}</b> desde ${esc(fechaHora(c.adentro_ahora.desde))}.`);
+  }
+  if (caja) caja.innerHTML = `<div class="aviso ${ambar ? "aviso--ambar" : "aviso--verde"}">${avisos.join("<br>")}</div>`;
+  const boton = $("#f-ingreso button[type=submit]");
+  if (boton) boton.focus();
+  return c;
 }
 
 // Lo último que leyó el escáner, para mandárselo al servidor tal cual. Lo que
@@ -783,7 +869,10 @@ async function abrirEscaner() {
       <div class="mira"></div>
       <div class="pista" id="pista-escaner">Apunte al código de la cédula</div>
     </div>
-    <button class="bt bt--ancho" id="b-cerrar-escaner" style="margin-bottom:.8rem">Cerrar la cámara</button>`;
+    <div class="fila" style="margin-bottom:.8rem">
+      <button class="bt crece" type="button" id="b-cerrar-escaner">Cerrar la cámara</button>
+      <button class="bt" type="button" id="b-linterna" hidden aria-pressed="false">Linterna</button>
+    </div>`;
   $("#b-cerrar-escaner").onclick = apagarEscaner;
 
   try {
@@ -806,6 +895,28 @@ async function abrirEscaner() {
   await video.play().catch(() => {});
   leyendo = true;
   bucleDeLectura(video);
+  conectarLinterna();
+}
+
+/* La linterna del teléfono, para leer la cédula de noche en la caseta. Solo
+ * aparece donde el navegador la deja prender (Chrome en Android); Safari de
+ * iPhone no la ofrece a las páginas web, y ahí el botón no se muestra. */
+function conectarLinterna() {
+  const b = $("#b-linterna");
+  const pista = camara && camara.getVideoTracks()[0];
+  if (!b || !pista || typeof pista.getCapabilities !== "function") return;
+  let caps = {};
+  try { caps = pista.getCapabilities() || {}; } catch (_) {}
+  if (!caps.torch) return;
+  b.hidden = false;
+  b.onclick = async () => {
+    const prender = b.getAttribute("aria-pressed") !== "true";
+    try {
+      await pista.applyConstraints({ advanced: [{ torch: prender }] });
+      b.setAttribute("aria-pressed", String(prender));
+      b.classList.toggle("bt--fuerte", prender);
+    } catch (_) { recado("No se pudo prender la linterna.", true); }
+  };
 }
 
 function apagarEscaner() {
@@ -890,8 +1001,6 @@ function usarCodigo(texto) {
 
   const campo = $("#i-run");
   if (campo) campo.value = rutLindo(r.run);
-  const nombre = $("#i-nombre");
-  if (nombre && !nombre.value) nombre.focus();
 
   const notas = [`${r.tipo_nombre} leída: ${rutLindo(r.run)}.`];
   if (!r.dv_ok) notas.push("Ojo: el dígito verificador no cuadra, revise contra el documento.");
@@ -900,7 +1009,9 @@ function usarCodigo(texto) {
     caja.innerHTML = `<div class="aviso ${r.dv_ok && !r.vencida ? "aviso--verde" : "aviso--ambar"}">
       ${notas.map(esc).join("<br>")}</div>`;
   }
-  recado("Cédula leída. Falta el nombre.");
+  recado("Cédula leída.");
+  // Si ya entró antes, se rellena lo demás y queda listo para registrar.
+  buscarConocido({ run: r.run });
 }
 
 /* Lee el código de la cédula para MOSTRARLO.
