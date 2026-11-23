@@ -398,6 +398,75 @@ input[type=checkbox]{
 .ingreso .escudo{justify-content:center;margin-bottom:1rem;flex-direction:column;text-align:center}
 .ingreso .escudo img{width:58px;height:58px}
 
+/* ================================== la novedad rápida (pestaña Novedades)
+   Tipo con dos botones grandes, observación, ubicación con su precisión y
+   foto. Todo a la vista, sin abrir un cajón: es lo que más se usa en el turno. */
+#f-nov-rapida .titulito{display:block}
+.tiposNov{display:grid;grid-template-columns:1fr 1fr;gap:.5rem}
+.tiposNov input{position:absolute;opacity:0;pointer-events:none}
+.tiposNov label{
+  margin:0;min-height:64px;padding:.55rem .3rem;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:.15rem;
+  border:1px solid var(--borde);border-radius:var(--r-s);background:var(--sup);
+  color:var(--texto);font-size:.95rem;font-weight:600;cursor:pointer;text-align:center;
+  -webkit-tap-highlight-color:transparent;
+}
+.tiposNov__ico{font-size:1.35rem;line-height:1}
+.tiposNov input:checked + label{border-color:var(--verde);background:var(--verde-suave);box-shadow:inset 0 0 0 1px var(--verde)}
+.tiposNov input[value="incidencia"]:checked + label{border-color:var(--rojo);background:var(--rojo-suave);box-shadow:inset 0 0 0 1px var(--rojo)}
+.tiposNov input:focus-visible + label{outline:2px solid var(--acento);outline-offset:2px}
+#f-nov-rapida .titulito{margin-top:.9rem}
+#f-nov-rapida .titulito:first-child{margin-top:0}
+
+.gpsNov{
+  display:flex;align-items:center;gap:.7rem;padding:.6rem .7rem;
+  border:1px solid var(--borde);border-radius:var(--r-s);background:var(--sup);
+}
+.gpsNov .crece{font-size:.95rem}
+.gpsNov small{display:block;color:var(--texto-2);font-size:.8rem;font-variant-numeric:tabular-nums}
+.gpsNov__punto{width:12px;height:12px;border-radius:50%;background:var(--gris);flex:none}
+.gpsNov[data-estado="ok"] .gpsNov__punto{background:var(--verde)}
+.gpsNov[data-estado="error"] .gpsNov__punto{background:var(--rojo)}
+.gpsNov[data-estado="buscando"] .gpsNov__punto{background:var(--acento);animation:gpsNovPulso 1s infinite}
+@keyframes gpsNovPulso{50%{opacity:.25}}
+
+.fotoNov{
+  position:relative;margin:0;display:flex;align-items:center;justify-content:center;
+  min-height:56px;padding:.8rem;border:2px dashed var(--acento);border-radius:var(--r-s);
+  background:var(--acento-suave);color:var(--texto);font-size:.95rem;font-weight:600;cursor:pointer;
+}
+.fotoNov input{position:absolute;opacity:0;width:1px;height:1px}
+.fotoNov:focus-within{outline:2px solid var(--acento);outline-offset:2px}
+.fotoNov__previa{display:block;width:100%;max-height:240px;object-fit:cover;border-radius:var(--r-s);margin-top:.6rem}
+.fotoNov__lista{display:block;width:100%;max-height:220px;object-fit:cover;border-radius:var(--r-xs);margin-top:.5rem}
+.item .detalle a{color:var(--acento)}
+
+/* ============================================ revisión (solo oficina) */
+.filtrosRev{display:grid;grid-template-columns:1fr 1fr;gap:.2rem .7rem;align-items:end}
+.filtrosRev > div:first-child{grid-column:1 / -1}
+.filtrosRev label{margin-top:.3rem}
+.filtrosRev .bt{margin-top:.6rem}
+@media (min-width:1024px){
+  .filtrosRev{grid-template-columns:2fr 1fr 1fr 1fr auto auto}
+  .filtrosRev > div:first-child{grid-column:auto}
+}
+.resumenRev{display:flex;flex-wrap:wrap;gap:.4rem 1.1rem;margin:.2rem 0 .8rem;font-size:.9rem;color:var(--texto-2)}
+.resumenRev b{color:var(--texto)}
+.grillaRev{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:.8rem}
+.tarjRev{
+  display:flex;flex-direction:column;overflow:hidden;
+  background:var(--sup);border:1px solid var(--borde-suave);border-left:4px solid var(--cian);
+  border-radius:var(--r);box-shadow:var(--sombra),var(--brillo);
+}
+.tarjRev--inc{border-left-color:var(--rojo)}
+.tarjRev img{display:block;width:100%;height:190px;object-fit:cover;background:var(--sup-3)}
+.tarjRev__sinfoto{height:56px;display:grid;place-items:center;color:var(--texto-3);font-size:.85rem;background:var(--sup-3)}
+.tarjRev__cuerpo{padding:.7rem .8rem .8rem;font-size:.9rem}
+.tarjRev__cuerpo p{margin:.4rem 0;white-space:pre-wrap;overflow-wrap:anywhere}
+.tarjRev__cuerpo .detalle{font-size:.82rem;color:var(--texto-2);margin-top:.1rem}
+.tarjRev__cuerpo a{color:var(--acento)}
+.tarjRev__turno{margin-top:.5rem;padding-top:.5rem;border-top:1px dashed var(--borde);font-size:.8rem;color:var(--texto-2)}
+
 /* ================================================= respeto por el sistema */
 @media (prefers-reduced-motion:reduce){
   *,*::before,*::after{

@@ -6,11 +6,13 @@ son papel:
 1. **Accesos** — quién y qué entra y sale de la instalación, leyendo el código
    de la cédula con la cámara o escribiendo el RUN a mano. El registro de
    vehículos es este mismo listado visto por el lado de los que traen patente.
-2. **Novedades** — el libro de novedades del turno.
+2. **Novedades** — el libro de novedades del turno: tipo (Novedad o
+   Incidente), observación, ubicación con su precisión y una foto opcional.
+   Al final de la misma pestaña está el **informe formal de evento especial**
+   (una denuncia, un robo, un daño), firmado con el dedo, para cuando hay que
+   entregar un documento firmado. Hasta el 22-11-2026 era una pestaña aparte.
 3. **Turno** — el certificado de cambio de turno, firmado con el dedo por el
    que se retira y por el que ingresa.
-4. **Eventos** — el informe de evento especial (una denuncia, un robo, un
-   daño), firmado con el dedo.
 
 Es un Worker aparte del de administración, con **la misma base de datos y las
 mismas cuentas**: los guardias entran con la cuenta con que marcan turno
@@ -35,6 +37,17 @@ reventar (`tablasListas()` en `src/index.js`).
 Después de cada push que traiga migración, mirar
 `https://acceso.seggarridos.com/api/diagnostico`: responde sí/no por tabla sin
 mostrar ningún valor.
+
+### Las fotos de las novedades
+Se achican en el teléfono antes de enviarse, según el tipo
+(`NOV_CALIDAD_FOTO` en `index.html`): una **novedad** a 800 px y calidad 60%
+(~50 KB), un **incidente** a 1280 px y calidad 70% (~130 KB), porque es
+evidencia y tiene que dejar leer una patente o un daño. Van en la carpeta privada `fotos-novedades` de Supabase Storage y las sube y
+lee solo el Worker; el navegador las pide a `/api/novedades/<id>/foto`. Hacen
+falta la columna y la carpeta de
+`supabase/migrations/20261123120000_novedades_fotos.sql`. Mientras no se
+aplique, la novedad se guarda **sin** la foto y la pantalla lo avisa;
+`/api/diagnostico` muestra `novedades_fotos: false`.
 
 ### Un ingreso por dominio
 La cookie de sesión **no lleva atributo `Domain`**, igual que en el resto del

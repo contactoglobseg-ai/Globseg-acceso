@@ -189,8 +189,12 @@ const ICONOS = {
   novedades: '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2zM9 7h7M9 11h7"/>',
   turno: '<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM23 11h-6M20 8l3 3-3 3"/>',
   eventos: '<path d="M10.3 3.2 1.8 17.5A2 2 0 0 0 3.5 20.5h17a2 2 0 0 0 1.7-3L13.7 3.2a2 2 0 0 0-3.4 0zM12 9v4M12 17h.01"/>',
+  revision: '<path d="M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z"/>',
 };
-const ROTULO = { accesos: "Accesos", novedades: "Novedades", turno: "Turno", eventos: "Eventos" };
+const ROTULO = { accesos: "Accesos", novedades: "Novedades", turno: "Turno", eventos: "Eventos", revision: "Revisión" };
+
+/** Las pestañas que ve cada uno. La revisión es solo de la oficina. */
+const pestanasDe = (u) => ["accesos", "novedades", "turno"].concat(u && u.tipo === "oficina" ? ["revision"] : []);
 
 function icono(nombre) {
   return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
@@ -260,7 +264,7 @@ function pintarMarco() {
     </header>
 
     <nav class="pestanas" id="pestanas" aria-label="Secciones">
-      ${["accesos", "novedades", "turno", "eventos"].map((v) => `
+      ${pestanasDe(u).map((v) => `
         <button data-vista="${v}" ${v === ESTADO.vista ? 'aria-current="page"' : ""}>
           ${icono(v)}<span>${ROTULO[v]}</span>
           ${v === "accesos" ? '<span class="globo" id="globo-adentro" hidden></span>' : ""}
@@ -946,18 +950,226 @@ function dvEnPantalla(rut) {
 }
 
 // ======================================================== vista: novedades
+/* Novedades y eventos van en una sola pestaña. Arriba, el formulario rápido:
+ * tipo (Novedad o Incidente), observación, ubicación con su precisión y una
+ * foto opcional. Abajo, lo escrito hoy. Al final, el informe formal de evento
+ * especial con firma, que sigue existiendo para cuando hay que entregarle un
+ * documento firmado al cliente o a Carabineros.
+ *
+ * Los nombres de esta sección empiezan con `nov` para no chocar con los de
+ * apariencia.js, firma.js y jsqr.js (ver la cabecera de este <script>). */
+let novPos = null;          // { lat, lon, prec, t } — la última ubicación obtenida
+let novFoto = null;         // data URL JPEG de la foto ya reducida y sellada
+let novArchivo = null;      // la foto original elegida, para volver a procesarla si cambia el tipo
+let novFotoTipo = null;     // con qué tipo se procesó novFoto
+
+/* Cuánto se achica la foto según el tipo. Una novedad común basta con verse;
+ * un incidente es evidencia y tiene que dejar leer una patente o un daño.
+ * La mayoría son novedades, así que el promedio queda en ~60 KB por foto en
+ * vez de ~100 KB, y los incidentes quedan con más detalle que antes. */
+const NOV_CALIDAD_FOTO = {
+  novedad:    { ancho: 800,  calidad: 0.6 },   // ~50–70 KB
+  incidencia: { ancho: 1280, calidad: 0.7 },   // ~150–200 KB
+};
+const novTipoElegido = () =>
+  (document.querySelector('input[name="nov-tipo"]:checked') || {}).value || "novedad";
+let novPidiendoGps = false;
+
 async function vistaNovedades() {
   const hoja = $("#hoja");
   hoja.innerHTML = selectorInstalacion() +
     (ESTADO.instalacion
-      ? `<button class="bt bt--fuerte bt--grande bt--ancho" id="b-novedad">+ Escribir novedad</button>
-         <div id="zona-novedades"><div class="vacio">Cargando…</div></div>`
+      ? `${formularioNovedadRapida()}
+         <div id="zona-novedades"><div class="vacio">Cargando…</div></div>
+         <div id="zona-eventos"></div>`
       : sinInstalacion());
   conectarSelectorInstalacion();
   if (!ESTADO.instalacion) return;
 
-  $("#b-novedad").onclick = () => abrirFormularioNovedad(null);
-  await refrescarNovedades();
+  conectarNovedadRapida();
+  await Promise.all([refrescarNovedades(), refrescarEventos()]);
+}
+
+function formularioNovedadRapida() {
+  return `
+    <form class="caja" id="f-nov-rapida" novalidate>
+      <span class="titulito">Tipo de registro</span>
+      <div class="tiposNov" role="radiogroup" aria-label="Tipo de registro">
+        <input type="radio" name="nov-tipo" id="nt-novedad" value="novedad" checked>
+        <label for="nt-novedad"><span class="tiposNov__ico" aria-hidden="true">⚠️</span>Novedad</label>
+        <input type="radio" name="nov-tipo" id="nt-incidencia" value="incidencia">
+        <label for="nt-incidencia"><span class="tiposNov__ico" aria-hidden="true">🚨</span>Incidente</label>
+      </div>
+
+      <label for="nov-texto">Observación</label>
+      <textarea id="nov-texto" maxlength="4000" placeholder="Qué pasó, quién, dónde (breve)"></textarea>
+
+      <span class="titulito">Ubicación</span>
+      <div class="gpsNov" id="nov-gps" aria-live="polite">
+        <span class="gpsNov__punto" aria-hidden="true"></span>
+        <div class="crece">
+          <span id="nov-gps-txt">Sin ubicación</span>
+          <small id="nov-gps-det"></small>
+        </div>
+        <button type="button" class="bt" id="nov-gps-bt">Actualizar</button>
+      </div>
+
+      <span class="titulito">Evidencia fotográfica</span>
+      <label class="fotoNov" for="nov-foto">📷 Tomar o subir foto
+        <input type="file" id="nov-foto" accept="image/*" capture="environment">
+      </label>
+      <img id="nov-prev" class="fotoNov__previa" alt="Vista previa de la foto" hidden>
+      <button type="button" class="bt bt--fantasma" id="nov-quitar" hidden>Quitar foto</button>
+
+      <div style="margin-top:1rem">
+        <button class="bt bt--fuerte bt--grande bt--ancho" type="submit">Anotar en el libro</button>
+      </div>
+    </form>`;
+}
+
+function conectarNovedadRapida() {
+  $("#nov-gps-bt").onclick = () => novUbicar(true);
+  $("#nov-foto").onchange = (ev) => {
+    const f = ev.target.files[0];
+    if (f) { novArchivo = f; novProcesarFoto(); }
+  };
+  // Si se cambia el tipo con la foto ya puesta, se vuelve a procesar con la
+  // calidad que le corresponde al tipo nuevo.
+  for (const r of document.querySelectorAll('input[name="nov-tipo"]')) {
+    r.onchange = () => { if (novArchivo) novProcesarFoto(); };
+  }
+  $("#nov-quitar").onclick = novQuitarFoto;
+  // Si ya hay una ubicación de hace menos de dos minutos se muestra; si no, se pide.
+  if (novPos && Date.now() - novPos.t < 120000) novPintarGps("ok"); else novUbicar(false);
+
+  $("#f-nov-rapida").onsubmit = async (ev) => {
+    ev.preventDefault();
+    const texto = $("#nov-texto").value.trim();
+    if (!texto) { recado("Escriba la observación: qué pasó, quién, dónde.", true); $("#nov-texto").focus(); return; }
+    const boton = $("#f-nov-rapida button[type=submit]");
+    await ocupado(boton, async () => {
+      // Si todavía no hay ubicación, se espera un poco más; sin ella se anota igual.
+      if (!novPos || Date.now() - novPos.t > 120000) await novUbicar(false);
+      const categoria = novTipoElegido();
+      // La foto tiene que ir con la calidad del tipo que se está enviando.
+      if (novArchivo && novFotoTipo !== categoria) await novProcesarFoto();
+      try {
+        const r = await pedir("/novedades", {
+          cuerpo: {
+            instalacion_id: ESTADO.instalacion,
+            categoria,
+            texto,
+            lat: novPos ? novPos.lat : undefined,
+            lon: novPos ? novPos.lon : undefined,
+            exactitud_m: novPos ? novPos.prec : undefined,
+            foto: novFoto || undefined,
+          },
+        });
+        $("#nov-texto").value = "";
+        novQuitarFoto();
+        $("#nt-novedad").checked = true;
+        if (r.aviso) recado(r.aviso, true);
+        else recado(novPos ? "Anotado en el libro, con ubicación." : "Anotado en el libro, SIN ubicación.", !novPos);
+        await refrescarNovedades();
+      } catch (e) { recado(e.message, true); }
+    });
+  };
+}
+
+/** Pinta el recuadro de ubicación. estado: "", "buscando", "ok", "error". */
+function novPintarGps(estado, mensaje) {
+  const caja = $("#nov-gps");
+  if (!caja) return;
+  caja.dataset.estado = estado;
+  if (estado === "ok" && novPos) {
+    $("#nov-gps-txt").textContent = "Ubicación lista";
+    $("#nov-gps-det").textContent = `${novPos.lat}, ${novPos.lon} · ±${novPos.prec} m`;
+  } else {
+    $("#nov-gps-txt").textContent = mensaje || "Sin ubicación";
+    $("#nov-gps-det").textContent = "";
+  }
+}
+
+/** Pide la ubicación con precisión alta. Nunca detiene la anotación: si el
+ *  teléfono la niega o no hay señal de GPS, la novedad se escribe sin ella. */
+function novUbicar(aMano) {
+  return new Promise((listo) => {
+    if (!navigator.geolocation) { novPintarGps("error", "Este teléfono no entrega ubicación"); return listo(null); }
+    if (novPidiendoGps && !aMano) return listo(novPos);
+    novPidiendoGps = true;
+    novPintarGps("buscando", "Buscando ubicación…");
+    navigator.geolocation.getCurrentPosition(
+      (p) => {
+        novPidiendoGps = false;
+        novPos = {
+          lat: +p.coords.latitude.toFixed(6),
+          lon: +p.coords.longitude.toFixed(6),
+          prec: Math.round(p.coords.accuracy),
+          t: Date.now(),
+        };
+        ubicacionCache = { t: novPos.t, v: { lat: novPos.lat, lon: novPos.lon } };
+        novPintarGps("ok");
+        listo(novPos);
+      },
+      (err) => {
+        novPidiendoGps = false;
+        novPintarGps("error",
+          err.code === 1 ? "Permiso de ubicación denegado: actívelo en el navegador"
+          : err.code === 3 ? "Tardó demasiado: salga a un lugar abierto y toque Actualizar"
+          : "No se pudo obtener la ubicación");
+        listo(null);
+      },
+      { enableHighAccuracy: true, timeout: 12000, maximumAge: 30000 });
+  });
+}
+
+/** Reduce la foto según el tipo (NOV_CALIDAD_FOTO) y le estampa fecha, hora
+ *  y coordenadas. Devuelve una promesa que se cumple cuando la foto está lista. */
+function novProcesarFoto() {
+  const archivo = novArchivo;
+  const tipo = novTipoElegido();
+  const { ancho, calidad } = NOV_CALIDAD_FOTO[tipo] || NOV_CALIDAD_FOTO.novedad;
+  return new Promise((listo) => {
+    if (!archivo) return listo();
+    const url = URL.createObjectURL(archivo);
+    const img = new Image();
+    img.onload = () => {
+      const w = Math.min(ancho, img.width), h = Math.round(img.height * w / img.width);
+      const c = document.createElement("canvas"); c.width = w; c.height = h;
+      const x = c.getContext("2d");
+      x.drawImage(img, 0, 0, w, h);
+      const d = new Date();
+      const sello = d.toLocaleDateString("es-CL") + " " + horaAhora() +
+        (novPos ? `  ${novPos.lat}, ${novPos.lon}` : "");
+      const fs = Math.max(14, Math.round(w / 38)), pad = 8, alto = fs + pad * 2;
+      x.font = `600 ${fs}px sans-serif`;
+      x.fillStyle = "rgba(20,0,79,.75)"; x.fillRect(0, h - alto, w, alto);
+      x.fillStyle = "#00e88a"; x.textBaseline = "middle"; x.fillText(sello, pad, h - alto / 2);
+      URL.revokeObjectURL(url);
+      // Si mientras tanto se quitó o se cambió la foto, este resultado ya no sirve.
+      if (novArchivo !== archivo) return listo();
+      novFoto = c.toDataURL("image/jpeg", calidad);
+      novFotoTipo = tipo;
+      const prev = $("#nov-prev");
+      if (prev) { prev.src = novFoto; prev.hidden = false; $("#nov-quitar").hidden = false; }
+      listo();
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      if (novArchivo === archivo) { novArchivo = null; recado("No se pudo leer la imagen. Pruebe con otra foto.", true); }
+      listo();
+    };
+    img.src = url;
+  });
+}
+
+function novQuitarFoto() {
+  novFoto = null;
+  novArchivo = null;
+  novFotoTipo = null;
+  const i = $("#nov-foto"); if (i) i.value = "";
+  const prev = $("#nov-prev"); if (prev) { prev.hidden = true; prev.removeAttribute("src"); }
+  const q = $("#nov-quitar"); if (q) q.hidden = true;
 }
 
 async function refrescarNovedades() {
@@ -996,7 +1208,7 @@ function filaNovedad(n, corregidas) {
   return `<li class="item">
     <div class="fila fila--entre">
       <div class="crece">
-        <span class="sello ${n.corrige_id ? "sello--ambar" : "sello--cian"}">
+        <span class="sello ${n.corrige_id ? "sello--ambar" : n.categoria === "incidencia" ? "sello--rojo" : "sello--cian"}">
           ${esc(n.corrige_id ? "Corrección" : (ESTADO.categorias[n.categoria] || n.categoria))}
         </span>
         ${corregidas.has(n.id) ? '<span class="sello sello--gris">Corregida después</span>' : ""}
@@ -1008,6 +1220,12 @@ function filaNovedad(n, corregidas) {
       ${esc(n.quien_nombre)}
       ${n.corrige_id ? ` · corrige la anotación #${n.corrige_id}` : ""}
     </div>
+    <div class="detalle">
+      ${n.lat != null && n.lon != null
+        ? `<a href="https://www.google.com/maps?q=${encodeURIComponent(n.lat + "," + n.lon)}" target="_blank" rel="noopener">Ver en el mapa${n.exactitud_m != null ? ` (±${esc(n.exactitud_m)} m)` : ""}</a>`
+        : `<span class="gris">Sin ubicación</span>`}
+    </div>
+    ${n.foto_ruta ? `<img class="fotoNov__lista" loading="lazy" src="/api/novedades/${n.id}/foto" alt="Foto de la novedad">` : ""}
     ${!n.corrige_id ? `<div style="margin-top:.5rem">
       <button class="bt bt--fantasma" data-corrige="${n.id}">Corregir</button></div>` : ""}
   </li>`;
@@ -1206,21 +1424,11 @@ async function abrirFormularioTurno() {
   });
 }
 
-// ========================================================= vista: eventos
-async function vistaEventos() {
-  const hoja = $("#hoja");
-  hoja.innerHTML = selectorInstalacion() +
-    (ESTADO.instalacion
-      ? `<button class="bt bt--fuerte bt--grande bt--ancho" id="b-evento">+ Informar un evento</button>
-         <div id="zona-eventos"><div class="vacio">Cargando…</div></div>`
-      : sinInstalacion());
-  conectarSelectorInstalacion();
-  if (!ESTADO.instalacion) return;
-
-  $("#b-evento").onclick = abrirFormularioEvento;
-  await refrescarEventos();
-}
-
+// ======================================== eventos (dentro de Novedades)
+/* El informe formal de evento especial, con firma. Ya no tiene pestaña
+ * propia: vive al final de Novedades. Para el día a día basta la novedad
+ * rápida de arriba; esto queda para cuando hay que entregar un documento
+ * firmado. */
 async function refrescarEventos() {
   const zona = $("#zona-eventos");
   if (!zona) return;
@@ -1229,11 +1437,16 @@ async function refrescarEventos() {
   catch (e) { zona.innerHTML = `<div class="aviso aviso--rojo">${esc(e.message)}</div>`; return; }
 
   zona.innerHTML = `
-    <h2 style="margin:1.1rem 0 .5rem">Eventos informados</h2>
+    <h2 style="margin:1.4rem 0 .4rem">Informe formal de evento especial</h2>
+    <p class="chico gris" style="margin:0 0 .6rem">
+      Solo cuando hay que entregar un documento firmado (al cliente o a
+      Carabineros). Para lo demás basta la novedad de arriba.
+    </p>
+    <button class="bt bt--ancho" id="b-evento">+ Informe con firma</button>
     ${r.eventos.length
-      ? `<ul class="lista">${r.eventos.map(filaActa).join("")}</ul>`
-      : `<div class="vacio">No hay eventos informados en esta instalación.</div>`}`;
+      ? `<ul class="lista" style="margin-top:.6rem">${r.eventos.map(filaActa).join("")}</ul>` : ""}`;
 
+  $("#b-evento").onclick = abrirFormularioEvento;
   zona.onclick = (ev) => {
     const b = ev.target.closest("button[data-acta]");
     if (b) abrirActa("eventos", b.dataset.acta);
@@ -1451,12 +1664,121 @@ async function abrirActa(cual, id) {
   });
 }
 
+// ========================================================= vista: revisión
+/* Para la oficina: las novedades de todas las instalaciones, con su foto, su
+ * ubicación y quién marcó turno ese día en esa instalación (el cruce con la
+ * asistencia). Solo lee: desde acá no se escribe ni se anula nada. */
+let revNovedades = [];
+
+async function vistaRevision() {
+  const hoja = $("#hoja");
+  if (ESTADO.usuario.tipo !== "oficina") { ESTADO.vista = "novedades"; return pintar(); }
+  const hoy = fechaHoy();
+  hoja.innerHTML = `
+    <form class="caja filtrosRev" id="f-rev">
+      <div><label for="r-inst">Instalación</label>
+        <select id="r-inst"><option value="">Todas</option>
+          ${ESTADO.instalaciones.map((i) => `<option value="${i.id}">${esc(i.nombre)}</option>`).join("")}
+        </select></div>
+      <div><label for="r-desde">Desde</label><input type="date" id="r-desde" value="${hoy}" max="${hoy}"></div>
+      <div><label for="r-hasta">Hasta</label><input type="date" id="r-hasta" value="${hoy}" max="${hoy}"></div>
+      <div><label for="r-tipo">Tipo</label>
+        <select id="r-tipo"><option value="">Todos</option><option value="novedad">Novedad</option><option value="incidencia">Incidente</option></select></div>
+      <button class="bt bt--fuerte" type="submit">Ver</button>
+      <button class="bt" type="button" id="r-csv">Exportar CSV</button>
+    </form>
+    <div class="resumenRev" id="r-resumen"></div>
+    <div id="r-grilla"><div class="vacio">Cargando…</div></div>`;
+  $("#f-rev").onsubmit = (ev) => { ev.preventDefault(); revCargar(); };
+  $("#r-csv").onclick = revCsv;
+  await revCargar();
+}
+
+async function revCargar() {
+  const q = new URLSearchParams({ desde: $("#r-desde").value, hasta: $("#r-hasta").value, tope: "300" });
+  if ($("#r-inst").value) q.set("instalacion", $("#r-inst").value);
+  if ($("#r-tipo").value) q.set("categoria", $("#r-tipo").value);
+  const grilla = $("#r-grilla");
+  let r;
+  try { r = await pedir("/novedades?" + q); }
+  catch (e) { grilla.innerHTML = `<div class="aviso aviso--rojo">${esc(e.message)}</div>`; return; }
+  revNovedades = r.novedades;
+
+  const n = (c) => revNovedades.filter((x) => x.categoria === c).length;
+  $("#r-resumen").innerHTML = [
+    ["Total", revNovedades.length], ["Incidentes", n("incidencia")], ["Novedades", n("novedad")],
+    ["Con foto", revNovedades.filter((x) => x.foto_ruta).length],
+    ["Sin ubicación", revNovedades.filter((x) => x.lat == null).length],
+  ].map(([k, v]) => `<span>${k}: <b>${v}</b></span>`).join("") +
+    (r.tope_alcanzado ? `<span class="gris">Se muestran las primeras 300: acote las fechas.</span>` : "");
+
+  if (!revNovedades.length) { grilla.innerHTML = `<div class="vacio">No hay novedades con esos filtros.</div>`; return; }
+  grilla.innerHTML = `<div class="grillaRev">${revNovedades.map(revTarjeta).join("")}</div>`;
+  revTurnos();
+}
+
+function revTarjeta(x) {
+  const inc = x.categoria === "incidencia";
+  const tipo = x.corrige_id ? "Corrección" : (ESTADO.categorias[x.categoria] || x.categoria);
+  return `<article class="tarjRev ${inc ? "tarjRev--inc" : ""}">
+    ${x.foto_ruta
+      ? `<a href="/api/novedades/${x.id}/foto" target="_blank" rel="noopener" title="Ver la foto completa">
+           <img loading="lazy" src="/api/novedades/${x.id}/foto" alt="Foto de la novedad"></a>`
+      : `<div class="tarjRev__sinfoto">Registro sin foto</div>`}
+    <div class="tarjRev__cuerpo">
+      <div><b>${esc(x.instalacion || "—")}</b>
+        <span class="sello ${x.corrige_id ? "sello--ambar" : inc ? "sello--rojo" : "sello--cian"}">${esc(tipo)}</span></div>
+      <div class="detalle">👤 ${esc(x.quien_nombre)}</div>
+      <div class="detalle">🕒 ${esc(fechaHora(x.cuando))}</div>
+      <p>${esc(x.texto)}</p>
+      <div class="detalle">${x.lat != null
+        ? `<a href="https://www.google.com/maps?q=${encodeURIComponent(x.lat + "," + x.lon)}" target="_blank" rel="noopener">📍 Ver en el mapa${x.exactitud_m != null ? ` (±${esc(x.exactitud_m)} m)` : ""}</a>`
+        : `<span class="gris">📍 Sin ubicación</span>`}</div>
+      <div class="tarjRev__turno" data-clave="${esc(x.instalacion_id + "|" + x.fecha)}">En turno: …</div>
+    </div>
+  </article>`;
+}
+
+/* El cruce con la asistencia: una consulta por instalación y día, no por tarjeta. */
+async function revTurnos() {
+  const claves = [...new Set(revNovedades.map((x) => `${x.instalacion_id}|${x.fecha}`))].slice(0, 40);
+  for (const k of claves) {
+    const [inst, fecha] = k.split("|");
+    let txt = "En turno: no se pudo consultar la asistencia";
+    try {
+      const r = await pedir(`/turno?instalacion=${inst}&fecha=${fecha}`);
+      txt = r.turnos.length
+        ? "En turno: " + r.turnos.map((t) => {
+            const e = t.marcas.find((m) => m.tipo === "entrada");
+            const s = [...t.marcas].reverse().find((m) => m.tipo === "salida");
+            return `${t.nombre} (${e ? hora(e.cuando) : "?"}–${s ? hora(s.cuando) : "sin salida"}${t.fecha !== fecha ? ", turno de la víspera" : ""})`;
+          }).join(" · ")
+        : "En turno: nadie marcó asistencia ese día en esta instalación";
+    } catch (_) { /* queda el texto de error */ }
+    for (const el of document.querySelectorAll(`.tarjRev__turno[data-clave="${CSS.escape(k)}"]`)) el.textContent = txt;
+  }
+}
+
+function revCsv() {
+  if (!revNovedades.length) { recado("No hay novedades para exportar.", true); return; }
+  const c = (v) => '"' + String(v == null ? "" : v).replace(/"/g, '""') + '"';
+  const filas = [["fecha_hora", "instalacion", "quien", "tipo", "texto", "latitud", "longitud", "precision_m", "con_foto", "id"]]
+    .concat(revNovedades.map((x) => [fechaHora(x.cuando), x.instalacion, x.quien_nombre,
+      ESTADO.categorias[x.categoria] || x.categoria, x.texto, x.lat, x.lon, x.exactitud_m, x.foto_ruta ? "sí" : "no", x.id]));
+  const blob = new Blob(["\ufeff" + filas.map((f) => f.map(c).join(",")).join("\n")], { type: "text/csv;charset=utf-8" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `novedades_${$("#r-desde").value}_${$("#r-hasta").value}.csv`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+}
+
 // ============================================================== arranque
 const VISTAS = {
   accesos: vistaAccesos,
   novedades: vistaNovedades,
   turno: vistaTurno,
-  eventos: vistaEventos,
+  revision: vistaRevision,
 };
 
 function pintar() {
@@ -1490,7 +1812,8 @@ async function arrancarSesion() {
       ? String(r.usuario.instalacion_id) : null;
 
   const vistaGuardada = leerLocal("vista");
-  if (vistaGuardada && VISTAS[vistaGuardada]) ESTADO.vista = vistaGuardada;
+  if (vistaGuardada === "eventos") ESTADO.vista = "novedades";   // la pestaña Eventos ahora vive en Novedades
+  else if (vistaGuardada && VISTAS[vistaGuardada] && pestanasDe(r.usuario).includes(vistaGuardada)) ESTADO.vista = vistaGuardada;
 
   pintarMarco();
   pintar();

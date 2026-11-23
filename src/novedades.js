@@ -13,6 +13,7 @@
 
 import { buscar, primero, insertar, anotar } from './datos.js';
 import { fechaChile, esFecha } from './fechas.js';
+import { subirFoto, leerFoto, CARPETA_NOVEDADES } from './almacen.js';
 
 export const CATEGORIAS = ['novedad', 'ronda', 'incidencia', 'entrega_turno', 'otro'];
 
@@ -21,12 +22,52 @@ export const CATEGORIAS = ['novedad', 'ronda', 'incidencia', 'entrega_turno', 'o
 export const GLOSA_CATEGORIA = {
   novedad: 'Novedad',
   ronda: 'Ronda',
-  incidencia: 'Incidencia',
+  incidencia: 'Incidente',
   entrega_turno: 'Entrega de turno',
   otro: 'Otro',
 };
 
 const LARGO_TEXTO = 4000;
+
+// La foto llega desde el teléfono ya reducida a 800 px (unos 100 KB). El tope
+// es holgado a propósito: lo que se quiere frenar es un archivo que no es una
+// foto de la app, no una foto con mucho detalle.
+const MAX_BYTES_FOTO = 1.5 * 1024 * 1024;
+
+/**
+ * ¿Ya se aplicó la migración de las fotos (20261123120000_novedades_fotos.sql)?
+ *
+ * Mismo criterio que `tablasListas()` en index.js: mientras falte, el libro
+ * sigue funcionando igual que antes y la novedad se guarda sin foto, con un
+ * aviso que lo dice. Perder la anotación por una columna que falta sería peor
+ * que perder la foto.
+ */
+let columnasFotoOk = false;
+export async function columnasFotoListas(env) {
+  if (columnasFotoOk) return true;
+  try {
+    await buscar(env, 'novedades?select=foto_ruta,exactitud_m&limit=1');
+    columnasFotoOk = true;
+  } catch {
+    return false;
+  }
+  return true;
+}
+
+/** `data:image/jpeg;base64,...` → bytes, o null si no es un JPEG de verdad. */
+function bytesDeFoto(dataUrl) {
+  const m = /^data:image\/jpeg;base64,([A-Za-z0-9+/=]+)$/.exec(String(dataUrl || ''));
+  if (!m) return null;
+  let bin;
+  try { bin = atob(m[1]); } catch { return null; }
+  if (bin.length > MAX_BYTES_FOTO) return { demasiado: true };
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  // Los tres primeros bytes de todo JPEG. El encabezado del data URL lo
+  // escribe cualquiera; esto no.
+  if (!(bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff)) return null;
+  return { bytes };
+}
 
 /**
  * Escribe una anotación.
@@ -64,25 +105,83 @@ export async function escribir(env, cuerpo, quien) {
   }
 
   const ahora = new Date();
+  const fecha = fechaChile(ahora);
+
+  // La foto, si viene. Se sube ANTES de escribir la anotación para que la
+  // anotación nunca apunte a una foto que no está. Si algo falla con la foto,
+  // la novedad se escribe igual y se avisa: el libro no se detiene por eso.
+  const extra = {};
+  let aviso = null;
+  if (cuerpo.foto) {
+    const foto = bytesDeFoto(cuerpo.foto);
+    if (!foto) return { error: 'La foto no es una imagen JPEG válida', status: 400 };
+    if (foto.demasiado) return { error: 'La foto pesa demasiado (máximo 1,5 MB)', status: 413 };
+    if (!(await columnasFotoListas(env))) {
+      aviso = 'La novedad quedó anotada, pero SIN la foto: falta aplicar en Supabase ' +
+              'la migración 20261123120000_novedades_fotos.sql.';
+    } else {
+      const ruta = `${instalacionId}/${fecha}/${crypto.randomUUID()}.jpg`;
+      try {
+        await subirFoto(env, CARPETA_NOVEDADES, ruta, foto.bytes);
+        extra.foto_ruta = ruta;
+        extra.foto_bytes = foto.bytes.length;
+      } catch (e) {
+        console.error('No se pudo subir la foto de la novedad:', e.message);
+        aviso = 'La novedad quedó anotada, pero la foto no se pudo guardar. Avise a la oficina.';
+      }
+    }
+  }
+  if (await columnasFotoListas(env)) {
+    const exactitud = numeroONulo(cuerpo.exactitud_m, 0, 1e6);
+    if (exactitud !== null) extra.exactitud_m = Math.round(exactitud);
+  }
+
   const [fila] = await insertar(env, 'novedades', {
     instalacion_id: instalacionId,
     trabajador_id: quien.trabajador_id ?? null,
     quien: quien.usuario,
     quien_nombre: quien.nombre,
     cuando: ahora.toISOString(),
-    fecha: fechaChile(ahora),
+    fecha,
     categoria,
     texto,
     lat: numeroONulo(cuerpo.lat, -90, 90),
     lon: numeroONulo(cuerpo.lon, -180, 180),
     corrige_id: corrigeId,
+    ...extra,
   });
 
   await anotar(env, quien.usuario, 'novedad', fila.id,
     corrigeId ? 'corrigió una novedad' : 'escribió una novedad',
-    `${instalacion.nombre} · ${GLOSA_CATEGORIA[categoria]}`);
+    `${instalacion.nombre} · ${GLOSA_CATEGORIA[categoria]}${extra.foto_ruta ? ' · con foto' : ''}`);
 
-  return { novedad: { ...fila, instalacion: instalacion.nombre } };
+  return { novedad: { ...fila, instalacion: instalacion.nombre }, aviso };
+}
+
+/**
+ * La foto de una novedad, entregada desde este mismo dominio.
+ *
+ * La ve quien puede ver el libro, que es cualquiera con sesión: es la misma
+ * regla que el listado. Si eso cambia allá, cambia acá.
+ */
+export async function foto(env, id) {
+  const n = Number(id);
+  if (!Number.isInteger(n) || n <= 0) return { error: 'Foto no encontrada', status: 404 };
+  if (!(await columnasFotoListas(env))) return { error: 'Foto no encontrada', status: 404 };
+  const fila = await primero(env, `novedades?select=foto_ruta&id=eq.${n}`);
+  if (!fila || !fila.foto_ruta) return { error: 'Foto no encontrada', status: 404 };
+  const r = await leerFoto(env, CARPETA_NOVEDADES, fila.foto_ruta);
+  if (!r) return { error: 'La foto no está en la carpeta', status: 404 };
+  return {
+    respuesta: new Response(r.body, {
+      headers: {
+        'content-type': 'image/jpeg',
+        // Privada: no se guarda en cachés compartidos. Una hora en el teléfono.
+        'cache-control': 'private, max-age=3600',
+        'x-content-type-options': 'nosniff',
+      },
+    }),
+  };
 }
 
 function numeroONulo(v, min, max) {
@@ -124,4 +223,33 @@ export async function contarEntre(env, instalacionId, desdeISO, hastaISO) {
     `novedades?select=id&instalacion_id=eq.${instalacionId}` +
     `&cuando=gte.${desdeISO}&cuando=lte.${hastaISO}&limit=500`);
   return Array.isArray(filas) ? filas.length : 0;
+}
+
+/**
+ * Quién marcó turno en una instalación un día dado, y la víspera para cubrir
+ * el turno de noche que empezó el día anterior. Es el cruce que la revisión
+ * de la oficina pone al lado de cada novedad: qué guardia estaba cuando se
+ * escribió. Lee `marcas` y `trabajadores`, que son del libro de asistencia:
+ * acá solo se leen, nunca se escriben.
+ */
+export async function turnoDelDia(env, p) {
+  const inst = Number(p.get('instalacion'));
+  if (!Number.isInteger(inst) || inst <= 0) return { error: 'Falta la instalación', status: 400 };
+  const fecha = esFecha(p.get('fecha')) ? p.get('fecha') : fechaChile();
+  const vispera = new Date(Date.parse(fecha + 'T12:00:00Z') - 864e5).toISOString().slice(0, 10);
+  const marcas = await buscar(env,
+    `marcas?select=trabajador_id,tipo,cuando,fecha&instalacion_id=eq.${inst}` +
+    `&fecha=gte.${vispera}&fecha=lte.${fecha}&order=cuando.asc&limit=500`);
+  const ids = [...new Set(marcas.map((m) => m.trabajador_id))];
+  const nombres = ids.length
+    ? Object.fromEntries((await buscar(env, `trabajadores?select=id,nombre&id=in.(${ids.join(',')})`))
+        .map((t) => [t.id, t.nombre]))
+    : {};
+  const porPersona = {};
+  for (const m of marcas) {
+    const k = `${m.trabajador_id}|${m.fecha}`;
+    porPersona[k] ??= { nombre: nombres[m.trabajador_id] || '—', fecha: m.fecha, marcas: [] };
+    porPersona[k].marcas.push({ tipo: m.tipo, cuando: m.cuando });
+  }
+  return { fecha, vispera, turnos: Object.values(porPersona) };
 }

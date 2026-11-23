@@ -220,6 +220,10 @@ async function revisarTablas(env) {
       r[t] = false;
     }
   }
+  // Las fotos de las novedades (migración 20261123120000_novedades_fotos.sql).
+  // Si da false, el libro funciona igual pero las novedades se guardan sin foto.
+  r.novedades_fotos = await nov.columnasFotoListas(env);
+
   // Las tres del resto del sistema de las que esta aplicación depende. Si
   // alguna diera false, el problema no es de acá: es que se apuntó a otra base.
   for (const t of ['trabajadores', 'usuarios', 'instalaciones', 'datos_empresa']) {
@@ -291,6 +295,17 @@ async function api(request, env, url, quien) {
   if (ruta === '/novedades' && metodo === 'POST') {
     const r = await nov.escribir(env, cuerpo, quien);
     return r.error ? error(r.error, r.status) : json(r, 201);
+  }
+  // El cruce con la asistencia para la revisión: solo la oficina.
+  if (ruta === '/turno' && metodo === 'GET') {
+    if (quien.tipo !== 'oficina') return error('La revisión es para la oficina', 403);
+    const r = await nov.turnoDelDia(env, p);
+    return r.error ? error(r.error, r.status) : json(r);
+  }
+  m = ruta.match(/^\/novedades\/(\d+)\/foto$/);
+  if (m && metodo === 'GET') {
+    const r = await nov.foto(env, m[1]);
+    return r.error ? error(r.error, r.status) : r.respuesta;
   }
 
   // ------------------------------------------------- certificados y eventos
