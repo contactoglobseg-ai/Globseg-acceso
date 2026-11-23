@@ -867,7 +867,7 @@ async function abrirEscaner() {
     <div class="escaner">
       <video id="v-camara" playsinline muted autoplay></video>
       <div class="mira"></div>
-      <div class="pista" id="pista-escaner">Apunte al código de la cédula</div>
+      <div class="pista" id="pista-escaner">Ponga el código de la cédula dentro del recuadro, a unos 15 cm</div>
     </div>
     <div class="fila" style="margin-bottom:.8rem">
       <button class="bt crece" type="button" id="b-cerrar-escaner">Cerrar la cámara</button>
@@ -878,7 +878,8 @@ async function abrirEscaner() {
   try {
     camara = await navigator.mediaDevices.getUserMedia({
       // La de atrás, que es la que apunta al documento.
-      video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 } },
+      // Más resolución = más puntos para el QR, que en la cédula mide 1,5 cm.
+      video: { facingMode: { ideal: "environment" }, width: { ideal: 1920 }, height: { ideal: 1080 } },
       audio: false,
     });
   } catch (e) {
@@ -896,6 +897,15 @@ async function abrirEscaner() {
   leyendo = true;
   bucleDeLectura(video);
   conectarLinterna();
+  // Enfoque continuo donde el navegador lo deja pedir (Android). Sin esto
+  // algunos teléfonos se quedan enfocados al fondo y la cédula sale borrosa.
+  try {
+    const pista = camara && camara.getVideoTracks()[0];
+    const caps = pista && pista.getCapabilities ? pista.getCapabilities() : {};
+    if (caps.focusMode && caps.focusMode.includes("continuous")) {
+      pista.applyConstraints({ advanced: [{ focusMode: "continuous" }] }).catch(() => {});
+    }
+  } catch (_) {}
 }
 
 /* La linterna del teléfono, para leer la cédula de noche en la caseta. Solo
@@ -952,6 +962,7 @@ async function bucleDeLectura(video) {
     ctx = lienzo.getContext("2d", { willReadFrequently: true });
   }
 
+  let cuadro = 0;
   const paso = async () => {
     if (!leyendo || !video.isConnected) return;
     let texto = null;
@@ -960,11 +971,26 @@ async function bucleDeLectura(video) {
         const encontrados = await detector.detect(video);
         if (encontrados.length) texto = encontrados[0].rawValue;
       } else if (video.videoWidth) {
-        // A media resolución: alcanza de sobra para un QR y deja el teléfono
-        // sin calentarse, que importa cuando esto corre un turno entero.
-        lienzo.width = Math.round(video.videoWidth / 2);
-        lienzo.height = Math.round(video.videoHeight / 2);
-        ctx.drawImage(video, 0, 0, lienzo.width, lienzo.height);
+        /* El QR de la cédula mide 1,5 cm y es denso. Antes se leía el cuadro
+         * entero a media resolución, y a la distancia normal el código quedaba
+         * en unos 70 puntos: demasiado poco, y en iPhone casi nunca se leía.
+         * Probado con una cédula real (nueva, de 2025): a media resolución
+         * solo se leía con la cédula casi pegada al lente; recortando el
+         * centro a resolución completa se lee también a distancia normal.
+         *
+         * Por eso ahora se alterna: dos cuadros de cada tres se lee el CENTRO
+         * (donde está el recuadro) a resolución completa, y uno de cada tres el
+         * cuadro entero reducido, por si el código quedó a un costado. */
+        const vw = video.videoWidth, vh = video.videoHeight;
+        let sx = 0, sy = 0, sw = vw, sh = vh, escala = Math.min(1, 640 / vw);
+        if (cuadro++ % 3 !== 2) {
+          sw = Math.round(vw * 0.7); sh = Math.round(vh * 0.7);   // ≈ el recuadro de la mira
+          sx = Math.round((vw - sw) / 2); sy = Math.round((vh - sh) / 2);
+          escala = Math.min(1, 900 / sw);       // tope para no calentar el teléfono
+        }
+        lienzo.width = Math.round(sw * escala);
+        lienzo.height = Math.round(sh * escala);
+        ctx.drawImage(video, sx, sy, sw, sh, 0, 0, lienzo.width, lienzo.height);
         const img = ctx.getImageData(0, 0, lienzo.width, lienzo.height);
         const r = window.jsQR(img.data, img.width, img.height, { inversionAttempts: "dontInvert" });
         if (r && r.data) texto = r.data;
