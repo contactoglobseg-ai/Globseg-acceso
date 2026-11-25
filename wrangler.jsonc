@@ -26,7 +26,7 @@
   "vars": {
     "SUPABASE_URL": "https://hjoljdjjsobweqbvlijr.supabase.co",
     // Cuentas de oficina que ven la pestaña Revisión, separadas por coma.
-    "REVISION_USUARIOS": "vislaj"
+    "REVISION_USUARIOS": "vislaj,jgarridob,jgarridoh"
   },
 
   "observability": { "enabled": true },
