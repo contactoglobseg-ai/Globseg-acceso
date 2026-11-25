@@ -448,7 +448,7 @@ input[type=checkbox]{
 .filtrosRev label{margin-top:.3rem}
 .filtrosRev .bt{margin-top:.6rem}
 @media (min-width:1024px){
-  .filtrosRev{grid-template-columns:2fr 1fr 1fr 1fr auto auto}
+  .filtrosRev{grid-template-columns:2fr 1fr 1fr 1fr auto auto auto}
   .filtrosRev > div:first-child{grid-column:auto}
 }
 .resumenRev{display:flex;flex-wrap:wrap;gap:.4rem 1.1rem;margin:.2rem 0 .8rem;font-size:.9rem;color:var(--texto-2)}
