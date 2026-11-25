@@ -2124,7 +2124,11 @@ async function revZip() {
       try {
         const r = await fetch(`/api/novedades/${x.id}/foto`, { credentials: "same-origin" });
         if (!r.ok) throw new Error(String(r.status));
-        archivos.push({ nombre: revNombreFoto(x), datos: new Uint8Array(await r.arrayBuffer()), fecha: new Date(x.escrita_en || x.cuando) });
+        const original = await r.blob();
+        // Con la etiqueta del informe; si algo falla al dibujarla, va la original.
+        let foto = original;
+        try { foto = await revEtiquetar(original, x); } catch (_) {}
+        archivos.push({ nombre: revNombreFoto(x), datos: new Uint8Array(await foto.arrayBuffer()), fecha: new Date(x.escrita_en || x.cuando) });
       } catch (_) { fallidas++; }
       hechas++;
       if (boton) boton.textContent = `Descargando ${hechas} de ${conFoto.length}…`;
@@ -2137,6 +2141,60 @@ async function revZip() {
   recado(fallidas
     ? `ZIP listo con ${conFoto.length - fallidas} fotos. ${fallidas} no se pudieron descargar: vuelva a intentar.`
     : `ZIP listo con ${conFoto.length} fotos y el CSV.`, fallidas > 0);
+}
+
+/* La etiqueta del informe: una franja AGREGADA debajo de la foto (no tapa
+ * nada, tampoco el sello de fecha, hora y GPS que la foto trae desde que se
+ * tomó) con instalación · fecha · hora · tipo · guardia. Los datos salen del
+ * registro, no del teléfono: lo que dice la etiqueta es lo que está en el
+ * libro. La foto guardada en la carpeta no se toca; esto es solo la copia
+ * que va en el ZIP. Si no cabe en una línea, va en dos. */
+async function revEtiquetar(blob, x) {
+  const url = URL.createObjectURL(blob);
+  try {
+    const img = await new Promise((listo, falla) => {
+      const i = new Image();
+      i.onload = () => listo(i);
+      i.onerror = () => falla(new Error("imagen"));
+      i.src = url;
+    });
+    const w = img.naturalWidth, h = img.naturalHeight;
+    const fs = Math.max(16, Math.round(w / 42)), pad = Math.round(fs * 0.7);
+    const t = new Date(x.escrita_en || x.cuando);
+    const dos = (n) => String(n).padStart(2, "0");
+    const fecha = `${dos(t.getDate())}-${dos(t.getMonth() + 1)}-${t.getFullYear()}`;
+    const horaTxt = `${dos(t.getHours())}:${dos(t.getMinutes())}`;
+    const tipo = x.corrige_id ? "Corrección" : (ESTADO.categorias[x.categoria] || x.categoria);
+    const colorTipo = x.categoria === "incidencia" ? "#ff6b81" : x.categoria === "sin_complejidades" ? "#00e88a" : "#7cc8ff";
+    const lugar = `${x.instalacion || "Sin instalación"} · ${fecha} · ${horaTxt} · `;
+    const quien = ` · ${x.quien_nombre || ""}`;
+
+    const medir = document.createElement("canvas").getContext("2d");
+    medir.font = `600 ${fs}px sans-serif`;
+    const unaLinea = medir.measureText(lugar + tipo + quien).width <= w - pad * 2;
+    const alto = unaLinea ? fs + pad * 2 : fs * 2 + pad * 2.6;
+
+    const c = document.createElement("canvas");
+    c.width = w; c.height = h + Math.round(alto);
+    const g = c.getContext("2d");
+    g.drawImage(img, 0, 0);
+    g.fillStyle = "#14004f"; g.fillRect(0, h, w, c.height - h);
+    g.font = `600 ${fs}px sans-serif`; g.textBaseline = "middle";
+    const escribir = (partes, y) => {
+      let xx = pad;
+      for (const [texto, color] of partes) { g.fillStyle = color; g.fillText(texto, xx, y); xx += g.measureText(texto).width; }
+    };
+    if (unaLinea) {
+      escribir([[lugar, "#ffffff"], [tipo, colorTipo], [quien, "#ffffff"]], h + alto / 2);
+    } else {
+      escribir([[lugar.replace(/ · $/, ""), "#ffffff"]], h + pad + fs / 2);
+      escribir([[tipo, colorTipo], [quien, "#ffffff"]], h + pad * 1.6 + fs * 1.5);
+    }
+    return await new Promise((listo, falla) =>
+      c.toBlob((b) => (b ? listo(b) : falla(new Error("jpeg"))), "image/jpeg", 0.9));
+  } finally {
+    URL.revokeObjectURL(url);
+  }
 }
 
 /* ZIP mínimo (método «stored», sin compresión) según la especificación de
