@@ -170,7 +170,12 @@ select{
   background-position:calc(100% - 18px) 50%, calc(100% - 13px) 50%;
   background-size:5px 5px, 5px 5px;background-repeat:no-repeat;
   padding-right:2.2rem;
+  
+/*La lista que se despliega la dibuja el sistema: con el fondo translúcido
+   del campo, Windows la pintaba blanca con la letra clara del tema oscuro. */
 }
+select option,select optgroup{background-color:var(--sup-solido);color:var(--texto)}
+select option:disabled{color:var(--texto-3)}
 input:focus,select:focus,textarea:focus{
   outline:2px solid var(--acento);outline-offset:-1px;border-color:var(--acento);
 }
