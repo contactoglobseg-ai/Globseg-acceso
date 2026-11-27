@@ -80,7 +80,7 @@ export async function columnasFotoListas(env) {
 }
 
 /** `data:image/jpeg;base64,...` → bytes, o null si no es un JPEG de verdad. */
-function bytesDeFoto(dataUrl) {
+export function bytesDeFoto(dataUrl) {
   const m = /^data:image\/jpeg;base64,([A-Za-z0-9+/=]+)$/.exec(String(dataUrl || ''));
   if (!m) return null;
   let bin;

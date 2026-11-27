@@ -223,7 +223,7 @@ async function revisarTablas(env) {
   const r = {};
   for (const t of ['accesos', 'novedades', 'cambios_turno', 'eventos_especiales',
                    'firmas_acceso', 'v_accesos', 'v_novedades', 'v_cambios_turno',
-                   'v_eventos']) {
+                   'v_eventos', 'cambios_vehiculo', 'fotos_vehiculo', 'v_cambios_vehiculo']) {
     try {
       await buscar(env, `${t}?select=id&limit=1`);
       r[t] = true;
@@ -332,14 +332,26 @@ async function api(request, env, url, quien) {
   }
 
   // ------------------------------------------------- certificados y eventos
-  for (const [prefijo, entidad] of [['/turnos', 'cambio_turno'], ['/eventos', 'evento']]) {
+  m = ruta.match(/^\/vehiculos\/(\d+)\/fotos\/(\d+)$/);
+  if (m && metodo === 'GET') {
+    const r = await actas.fotoVehiculo(env, m[1], m[2]);
+    return r.error ? error(r.error, r.status) : r.respuesta;
+  }
+  for (const [prefijo, entidad] of [['/turnos', 'cambio_turno'], ['/eventos', 'evento'],
+                                    ['/vehiculos', 'cambio_vehiculo']]) {
     if (ruta === prefijo && metodo === 'GET') {
+      // Sin instalación son todas: eso es la revisión, que es de la oficina.
+      if (entidad === 'cambio_vehiculo' && !p.get('instalacion') && !quien.puede_revisar) {
+        return error('Elija la instalación', 400);
+      }
       return json(await actas.listarActas(env, entidad, p));
     }
     if (ruta === prefijo && metodo === 'POST') {
       const r = entidad === 'cambio_turno'
         ? await actas.crearCertificado(env, cuerpo, quien)
-        : await actas.crearEvento(env, cuerpo, quien);
+        : entidad === 'evento'
+          ? await actas.crearEvento(env, cuerpo, quien)
+          : await actas.crearCambioVehiculo(env, cuerpo, quien);
       return r.error ? error(r.error, r.status) : json(r, 201);
     }
     m = ruta.match(new RegExp(`^${prefijo}/(\\d+)$`));

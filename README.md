@@ -64,6 +64,16 @@ la duplica) y `escrita_en` (la hora del teléfono; `cuando` sigue siendo la del
 servidor). Migración `20261123140000_novedades_sin_senal.sql`. Turno, eventos
 con firma y accesos siguen necesitando señal.
 
+### La pestaña Vehículo
+Cuando un guardia le pasa la camioneta a otro: patente, quién entrega, quién
+recibe y, solo si hay daño, la descripción y hasta 6 fotos (1280 px, con sello
+de fecha, hora y GPS). Es un acta como el cambio de turno (`CV-2026-0001`): el
+texto se congela, lleva el SHA-256 de cada foto y la firman los dos con el
+dedo. Las fotos van a la carpeta `fotos-novedades`, bajo `vehiculos/`. La
+patente se guarda sin guiones ni espacios (`ABCD12`) y el formulario sugiere
+las ya usadas en la instalación. En Revisión aparecen al final, con los que
+tienen daños primero. Migración `20261126120000_cambios_vehiculo.sql`.
+
 ### La pestaña Revisión
 Muestra las novedades de todas las instalaciones con foto, mapa y quién
 marcó turno ese día. La ven solo las cuentas de `REVISION_USUARIOS` en

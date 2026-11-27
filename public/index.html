@@ -198,11 +198,13 @@ const ICONOS = {
   turno: '<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM23 11h-6M20 8l3 3-3 3"/>',
   eventos: '<path d="M10.3 3.2 1.8 17.5A2 2 0 0 0 3.5 20.5h17a2 2 0 0 0 1.7-3L13.7 3.2a2 2 0 0 0-3.4 0zM12 9v4M12 17h.01"/>',
   revision: '<path d="M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z"/>',
+  vehiculo: '<path d="M3 17V12l2.2-5.2A2 2 0 0 1 7 5.5h10a2 2 0 0 1 1.8 1.3L21 12v5M3 12h18M3 17h18M6 17v2M18 17v2"/><circle cx="7.5" cy="14.5" r=".9"/><circle cx="16.5" cy="14.5" r=".9"/>',
 };
-const ROTULO = { accesos: "Accesos", novedades: "Novedades", turno: "Turno", eventos: "Eventos", revision: "Revisión" };
+const ROTULO = { accesos: "Accesos", novedades: "Novedades", turno: "Turno", vehiculo: "Vehículo",
+                 eventos: "Eventos", revision: "Revisión" };
 
 /** Las pestañas que ve cada uno. La revisión es solo de la oficina. */
-const pestanasDe = (u) => ["accesos", "novedades", "turno"].concat(u && u.puede_revisar ? ["revision"] : []);
+const pestanasDe = (u) => ["accesos", "novedades", "turno", "vehiculo"].concat(u && u.puede_revisar ? ["revision"] : []);
 
 function icono(nombre) {
   return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
@@ -1619,6 +1621,7 @@ async function refrescarTurnos() {
 
 function filaActa(a) {
   const esTurno = !!a.sale_nombre;
+  const esVehiculo = !!a.patente;
   const sello = a.estado === "anulado" ? "sello--rojo"
     : a.estado === "firmado" ? "sello--verde" : "sello--ambar";
   const rotuloEstado = a.estado === "anulado" ? "Anulado"
@@ -1630,10 +1633,15 @@ function filaActa(a) {
         <span class="sello ${sello}">${rotuloEstado}</span>
         ${a.firmas_descuadradas ? '<span class="sello sello--rojo">Firma descuadrada</span>' : ""}
       </div>
-      <span class="cuando">${esc(fechaHora(esTurno ? a.cuando : a.ocurrido_en))}</span>
+      <span class="cuando">${esc(fechaHora(esTurno || esVehiculo ? a.cuando : a.ocurrido_en))}</span>
     </div>
     <div class="detalle">
-      ${esTurno
+      ${esVehiculo
+        ? `🚙 <b>${esc(patenteLinda(a.patente))}</b> · Entrega ${esc(a.entrega_nombre)} · Recibe ${esc(a.recibe_nombre)}
+           ${a.con_danos
+             ? `<br><span class="sello sello--rojo">Con daños</span> ${esc(a.danos || "")}${a.fotos ? ` · 📷 ${a.fotos}` : ""}`
+             : `<br><span class="sello sello--verde">Sin daños</span>`}`
+        : esTurno
         ? `Sale ${esc(a.sale_nombre)} · Entra ${esc(a.entra_nombre)}`
         : `${esc(a.tipo)}${a.lugar ? " · " + esc(a.lugar) : ""}${a.policia ? " · con aviso a la autoridad" : ""}`}
     </div>
@@ -1728,6 +1736,230 @@ async function abrirFormularioTurno() {
       });
     };
   });
+}
+
+// ========================================================= vista: vehículo
+/* Cuando un guardia le pasa la camioneta a otro. Es un acta como el cambio de
+ * turno: quién entrega, quién recibe y la patente; si hay un daño, qué daño y
+ * sus fotos. La firman los dos con el dedo en el mismo teléfono. Sin daño no
+ * se pide nada más. */
+const VE_MAX_FOTOS = 6;
+let veFotos = [];          // [{ foto: dataURL, lat, lon, exactitud_m }]
+let vePatentes = [];
+
+const patenteLimpia = (v) => String(v || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+const patenteLinda = (p) => (/^[A-Z]{4}\d{2}$/.test(p) || /^[A-Z]{2}\d{4}$/.test(p))
+  ? `${p.slice(0, 2)}·${p.slice(2, 4)}·${p.slice(4)}` : (p || "");
+
+async function vistaVehiculo() {
+  const hoja = $("#hoja");
+  hoja.innerHTML = selectorInstalacion() +
+    (ESTADO.instalacion
+      ? `<button class="bt bt--fuerte bt--grande bt--ancho" id="b-vehiculo">+ Pasar la camioneta</button>
+         <div id="zona-vehiculos"><div class="vacio">Cargando…</div></div>`
+      : sinInstalacion());
+  conectarSelectorInstalacion();
+  if (!ESTADO.instalacion) return;
+  $("#b-vehiculo").onclick = abrirFormularioVehiculo;
+  await refrescarVehiculos();
+}
+
+async function refrescarVehiculos() {
+  const zona = $("#zona-vehiculos");
+  if (!zona) return;
+  let r;
+  try { r = await pedir(`/vehiculos?instalacion=${ESTADO.instalacion}`); }
+  catch (e) { zona.innerHTML = `<div class="aviso aviso--rojo">${esc(e.message)}</div>`; return; }
+  vePatentes = r.patentes || [];
+  zona.innerHTML = `
+    <h2 style="margin:1.1rem 0 .5rem">Últimos cambios de vehículo</h2>
+    ${r.cambios.length
+      ? `<ul class="lista">${r.cambios.map(filaActa).join("")}</ul>`
+      : `<div class="vacio">Todavía no se ha registrado ningún cambio de vehículo acá.</div>`}`;
+  zona.onclick = (ev) => {
+    const b = ev.target.closest("button[data-acta]");
+    if (b) abrirActa("vehiculos", b.dataset.acta);
+  };
+}
+
+async function abrirFormularioVehiculo() {
+  let trabajadores = [];
+  try {
+    trabajadores = (await pedir(`/trabajadores?instalacion=${ESTADO.instalacion}`)).trabajadores;
+    if (!trabajadores.length) trabajadores = (await pedir("/trabajadores")).trabajadores;
+  } catch (_) { /* se escriben a mano */ }
+  const opciones = (sel) => `
+    <option value="">— escribir el nombre a mano —</option>
+    ${trabajadores.map((t) => `<option value="${t.id}" ${String(t.id) === String(sel) ? "selected" : ""}>
+      ${esc(t.nombre)}</option>`).join("")}`;
+  // Quien tiene el teléfono es, casi siempre, el que recibe la camioneta.
+  const yo = ESTADO.usuario.tipo === "guardia" ? ESTADO.usuario : null;
+  const yoId = yo ? (trabajadores.find((t) => t.nombre === yo.nombre) || {}).id : null;
+  veFotos = [];
+
+  abrirCajon("Cambio de vehículo", `
+    <form id="f-vehiculo">
+      <label for="ve-patente">Patente</label>
+      <input id="ve-patente" list="ve-patentes" required autocomplete="off"
+             autocapitalize="characters" placeholder="Ej.: ABCD12" maxlength="10"
+             value="${vePatentes.length === 1 ? esc(vePatentes[0]) : ""}">
+      <datalist id="ve-patentes">${vePatentes.map((p) => `<option value="${esc(p)}">`).join("")}</datalist>
+
+      <label for="ve-entrega">¿Quién entrega la camioneta?</label>
+      <select id="ve-entrega">${opciones(null)}</select>
+      <input id="ve-entrega-nombre" placeholder="Nombre de quien entrega"
+             style="margin-top:.4rem" autocapitalize="words">
+
+      <label for="ve-recibe">¿Quién la recibe?</label>
+      <select id="ve-recibe">${opciones(yoId)}</select>
+      <input id="ve-recibe-nombre" placeholder="Nombre de quien recibe"
+             style="margin-top:.4rem" autocapitalize="words">
+
+      <span class="titulito" style="margin-top:1rem">¿Tiene algún daño?</span>
+      <div class="fila" style="gap:.5rem">
+        <label class="casilla crece"><input type="radio" name="ve-dano" value="no" checked><span>No, está bien</span></label>
+        <label class="casilla crece"><input type="radio" name="ve-dano" value="si"><span>Sí, tiene daño</span></label>
+      </div>
+
+      <div id="ve-zona-dano" hidden>
+        <label for="ve-danos">Describa el daño</label>
+        <textarea id="ve-danos" placeholder="Dónde está y cómo es. Ej.: rayón en la puerta trasera derecha, foco delantero izquierdo trizado."></textarea>
+        <span class="titulito">Fotos del daño (hasta ${VE_MAX_FOTOS})</span>
+        <label class="fotoNov" for="ve-foto">📷 Tomar o subir foto
+          <input type="file" id="ve-foto" accept="image/*" capture="environment">
+        </label>
+        <div class="veFotos" id="ve-fotos"></div>
+      </div>
+
+      <div class="pie-hoja">
+        <button class="bt" type="button" id="b-cancelar-ve">Cancelar</button>
+        <button class="bt bt--fuerte" type="submit">Emitir el acta</button>
+      </div>
+    </form>
+  `, () => {
+    $("#b-cancelar-ve").onclick = cerrarCajon;
+    const amarrar = (sel, campo) => {
+      const s = $(sel), i = $(campo);
+      const ver = () => { i.hidden = !!s.value; i.required = !s.value; };
+      s.onchange = ver; ver();
+    };
+    amarrar("#ve-entrega", "#ve-entrega-nombre");
+    amarrar("#ve-recibe", "#ve-recibe-nombre");
+    $("#ve-patente").onblur = (ev) => { ev.target.value = patenteLimpia(ev.target.value); };
+
+    const conDano = () => (document.querySelector('input[name="ve-dano"]:checked') || {}).value === "si";
+    for (const r of document.querySelectorAll('input[name="ve-dano"]')) {
+      r.onchange = () => {
+        $("#ve-zona-dano").hidden = !conDano();
+        $("#ve-danos").required = conDano();
+        if (conDano()) veUbicar();          // la ubicación se pide antes de la primera foto
+      };
+    }
+    $("#ve-foto").onchange = async (ev) => {
+      const f = ev.target.files[0];
+      ev.target.value = "";
+      if (!f) return;
+      if (veFotos.length >= VE_MAX_FOTOS) { recado(`Máximo ${VE_MAX_FOTOS} fotos.`, true); return; }
+      try { veFotos.push(await veProcesarFoto(f)); veFotosPintar(); }
+      catch (_) { recado("No se pudo leer esa foto. Intente de nuevo.", true); }
+    };
+    $("#ve-fotos").onclick = (ev) => {
+      const b = ev.target.closest("button[data-quitar]");
+      if (!b) return;
+      veFotos.splice(Number(b.dataset.quitar), 1);
+      veFotosPintar();
+    };
+
+    $("#f-vehiculo").onsubmit = async (ev) => {
+      ev.preventDefault();
+      const patente = patenteLimpia($("#ve-patente").value);
+      if (patente.length < 4) { recado("Escriba la patente de la camioneta.", true); $("#ve-patente").focus(); return; }
+      if (conDano() && $("#ve-danos").value.trim().length < 5) {
+        recado("Describa el daño: dónde está y cómo es.", true); $("#ve-danos").focus(); return;
+      }
+      if (conDano() && !veFotos.length &&
+          !confirm("No sacó ninguna foto del daño. ¿Emitir el acta igual, sin fotos?")) return;
+      const boton = $("#f-vehiculo button[type=submit]");
+      await ocupado(boton, async () => {
+        try {
+          const r = await pedir("/vehiculos", {
+            cuerpo: {
+              instalacion_id: ESTADO.instalacion,
+              patente,
+              entrega_trabajador_id: $("#ve-entrega").value || undefined,
+              entrega_nombre: $("#ve-entrega-nombre").value,
+              recibe_trabajador_id: $("#ve-recibe").value || undefined,
+              recibe_nombre: $("#ve-recibe-nombre").value,
+              con_danos: conDano(),
+              danos: conDano() ? $("#ve-danos").value : "",
+              fotos: conDano() ? veFotos : [],
+            },
+          });
+          veFotos = [];
+          cerrarCajon();
+          recado("Acta emitida. Falta que firmen los dos.");
+          await refrescarVehiculos();
+          abrirActa("vehiculos", r.cambio.id);
+        } catch (e) { recado(e.message, true); }
+      });
+    };
+  });
+}
+
+function veFotosPintar() {
+  const caja = $("#ve-fotos");
+  if (!caja) return;
+  caja.innerHTML = veFotos.map((f, i) => `
+    <figure class="veFoto">
+      <img src="${f.foto}" alt="Foto ${i + 1} del daño">
+      <button type="button" class="bt bt--fantasma" data-quitar="${i}" aria-label="Quitar la foto ${i + 1}">✕</button>
+    </figure>`).join("");
+  const sube = $("label[for=ve-foto]");
+  if (sube) sube.hidden = veFotos.length >= VE_MAX_FOTOS;
+}
+
+/* Ubicación precisa para las fotos del daño. Nunca detiene nada. */
+let vePos = null;
+function veUbicar() {
+  return new Promise((listo) => {
+    if (vePos && Date.now() - vePos.t < 120000) return listo(vePos);
+    if (!navigator.geolocation) return listo(null);
+    navigator.geolocation.getCurrentPosition(
+      (p) => {
+        vePos = { lat: +p.coords.latitude.toFixed(6), lon: +p.coords.longitude.toFixed(6),
+                  prec: Math.round(p.coords.accuracy), t: Date.now() };
+        listo(vePos);
+      },
+      () => listo(null),
+      { enableHighAccuracy: true, timeout: 8000, maximumAge: 30000 });
+  });
+}
+
+/** La foto reducida (1280 px, como un incidente) y con su sello de fecha,
+ *  hora y coordenadas, igual que en Novedades. */
+async function veProcesarFoto(archivo) {
+  const pos = await Promise.race([veUbicar(), new Promise((l) => setTimeout(() => l(vePos), 1500))]);
+  const url = URL.createObjectURL(archivo);
+  try {
+    const img = await new Promise((listo, falla) => {
+      const i = new Image();
+      i.onload = () => listo(i); i.onerror = () => falla(new Error("imagen")); i.src = url;
+    });
+    const w = Math.min(1280, img.width), h = Math.round(img.height * w / img.width);
+    const c = document.createElement("canvas"); c.width = w; c.height = h;
+    const x = c.getContext("2d");
+    x.drawImage(img, 0, 0, w, h);
+    const sello = new Date().toLocaleDateString("es-CL") + " " + horaAhora() +
+      (pos ? `  ${pos.lat}, ${pos.lon}` : "");
+    const fs = Math.max(14, Math.round(w / 38)), pad = 8, alto = fs + pad * 2;
+    x.font = `600 ${fs}px sans-serif`;
+    x.fillStyle = "rgba(20,0,79,.75)"; x.fillRect(0, h - alto, w, alto);
+    x.fillStyle = "#00e88a"; x.textBaseline = "middle"; x.fillText(sello, pad, h - alto / 2);
+    return { foto: c.toDataURL("image/jpeg", 0.7),
+             lat: pos ? pos.lat : null, lon: pos ? pos.lon : null, exactitud_m: pos ? pos.prec : null };
+  } finally {
+    URL.revokeObjectURL(url);
+  }
 }
 
 // ======================================== eventos (dentro de Novedades)
@@ -1850,6 +2082,14 @@ function abrirFormularioEvento() {
 // ==================================================== un acta: leer y firmar
 let lienzoFirma = null;
 
+/** Vuelve a pintar la lista de donde salió el acta. Revisión no tiene lista
+ *  que refrescar acá: se vuelve a cargar con «Ver». */
+async function refrescarActas(cual) {
+  if (cual === "turnos") return refrescarTurnos();
+  if (cual === "vehiculos") return $("#zona-vehiculos") ? refrescarVehiculos() : revVehiculos();
+  return refrescarEventos();
+}
+
 async function abrirActa(cual, id) {
   let r;
   try { r = await pedir(`/${cual}/${id}`); }
@@ -1867,6 +2107,12 @@ async function abrirActa(cual, id) {
          que este documento tiene ahora. No lo use como respaldo: avise a la oficina.</div>` : ""}
 
     <div class="actaTexto">${esc(d.cuerpo)}</div>
+    ${(r.fotos || []).length ? `
+      <h3 style="margin:1rem 0 .5rem">Fotos del daño</h3>
+      <div class="veFotos">${r.fotos.map((f) => `
+        <a class="veFoto" href="/api/vehiculos/${d.id}/fotos/${f.orden}" target="_blank" rel="noopener">
+          <img loading="lazy" src="/api/vehiculos/${d.id}/fotos/${f.orden}" alt="Foto ${f.orden} del daño"></a>`).join("")}
+      </div>` : ""}
 
     <h3 style="margin:1rem 0 .5rem">Firmas</h3>
     ${r.firmas.length ? r.firmas.map((f) => `
@@ -1919,7 +2165,7 @@ async function abrirActa(cual, id) {
         await pedir(`/${cual}/${id}/anular`, { cuerpo: { motivo } });
         cerrarCajon();
         recado("Documento anulado.");
-        if (cual === "turnos") await refrescarTurnos(); else await refrescarEventos();
+        await refrescarActas(cual);
       } catch (e) { recado(e.message, true); }
     };
 
@@ -1942,6 +2188,7 @@ async function abrirActa(cual, id) {
      */
     const nombreDeRol = {
       sale: d.sale_nombre, entra: d.entra_nombre,
+      entrega: d.entrega_nombre, recibe: d.recibe_nombre,
       autor: d.creado_por_nombre, testigo: null,
     };
     const decirQuienFirma = () => {
@@ -1963,7 +2210,7 @@ async function abrirActa(cual, id) {
           cuerpo: { rol: $("#a-rol").value, imagen: lienzoFirma.png(), leido: true },
         });
         recado(res.faltan.length ? `Firmado. Falta: ${res.faltan.join(", ")}.` : "Firmado por todos.");
-        if (cual === "turnos") await refrescarTurnos(); else await refrescarEventos();
+        await refrescarActas(cual);
         await abrirActa(cual, id);   // se vuelve a abrir, ya con la firma puesta
       } catch (e) { recado(e.message, true); }
     });
@@ -1995,7 +2242,8 @@ async function vistaRevision() {
       <button class="bt" type="button" id="r-zip">Descargar fotos (ZIP)</button>
     </form>
     <div class="resumenRev" id="r-resumen"></div>
-    <div id="r-grilla"><div class="vacio">Cargando…</div></div>`;
+    <div id="r-grilla"><div class="vacio">Cargando…</div></div>
+    <div id="r-vehiculos"></div>`;
   $("#f-rev").onsubmit = (ev) => { ev.preventDefault(); revCargar(); };
   $("#r-csv").onclick = revCsv;
   $("#r-zip").onclick = () => ocupado($("#r-zip"), revZip);
@@ -2011,6 +2259,7 @@ async function revCargar() {
   try { r = await pedir("/novedades?" + q); }
   catch (e) { grilla.innerHTML = `<div class="aviso aviso--rojo">${esc(e.message)}</div>`; return; }
   revNovedades = r.novedades;
+  revVehiculos();
 
   const n = (c) => revNovedades.filter((x) => x.categoria === c).length;
   $("#r-resumen").innerHTML = [
@@ -2048,6 +2297,37 @@ function revTarjeta(x) {
       <div class="tarjRev__turno" data-clave="${esc(x.instalacion_id + "|" + x.fecha)}">En turno: …</div>
     </div>
   </article>`;
+}
+
+/* Los cambios de vehículo del mismo filtro (instalación y fechas), con los
+ * que tienen daños primero. Se abren igual que en la pestaña Vehículo, con el
+ * acta, las fotos y las firmas. */
+async function revVehiculos() {
+  const zona = $("#r-vehiculos");
+  if (!zona) return;
+  const q = new URLSearchParams({ desde: $("#r-desde").value, hasta: $("#r-hasta").value, tope: "200" });
+  if ($("#r-inst").value) q.set("instalacion", $("#r-inst").value);
+  let r;
+  try { r = await pedir("/vehiculos?" + q); }
+  catch (e) {
+    zona.innerHTML = `<h2 style="margin:1.4rem 0 .5rem">Cambios de vehículo</h2>
+      <div class="aviso aviso--rojo">${esc(e.message)}</div>`;
+    return;
+  }
+  const lista = [...r.cambios].sort((a, b) => (b.con_danos - a.con_danos) || (b.id - a.id));
+  const conDanos = lista.filter((x) => x.con_danos).length;
+  zona.innerHTML = `
+    <h2 style="margin:1.4rem 0 .5rem">Cambios de vehículo
+      <span class="chico gris" style="font-weight:400">· ${lista.length}${conDanos
+        ? ` · <span style="color:var(--rojo)">${conDanos} con daños</span>` : ""}</span></h2>
+    ${lista.length
+      ? `<ul class="lista">${lista.map((x) => filaActa(x).replace(">Abrir y firmar<", ">Abrir<")
+          .replace('<div class="detalle">', `<div class="detalle"><b>${esc(x.instalacion_nombre)}</b><br>`)).join("")}</ul>`
+      : `<div class="vacio">No hay cambios de vehículo con esos filtros.</div>`}`;
+  zona.onclick = (ev) => {
+    const b = ev.target.closest("button[data-acta]");
+    if (b) abrirActa("vehiculos", b.dataset.acta);
+  };
 }
 
 /* El cruce con la asistencia: una consulta por instalación y día, no por tarjeta. */
@@ -2248,6 +2528,7 @@ const VISTAS = {
   accesos: vistaAccesos,
   novedades: vistaNovedades,
   turno: vistaTurno,
+  vehiculo: vistaVehiculo,
   revision: vistaRevision,
 };
 

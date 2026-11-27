@@ -33,7 +33,8 @@
 import { buscar, primero, insertar, actualizar, anotar, ErrorDatos } from './datos.js';
 import { formatearRut } from './rut.js';
 import { fechaChile, horaChile, fechaLarga, esFecha } from './fechas.js';
-import { contarEntre } from './novedades.js';
+import { contarEntre, bytesDeFoto } from './novedades.js';
+import { subirFoto, leerFoto, CARPETA_NOVEDADES } from './almacen.js';
 
 const LEY = 'Firmado electrónicamente conforme a la Ley N° 19.799 sobre documentos ' +
             'electrónicos y firma electrónica. Firma electrónica simple: su valor ' +
@@ -470,14 +471,212 @@ function desfaseChile(d) {
   }
 }
 
+// ================================================ cambio de vehículo
+/*
+ * Cuando un guardia le pasa la camioneta a otro. Es el mismo mecanismo que el
+ * cambio de turno —texto congelado, hash, dos firmas con el dedo— con lo que
+ * pidió la operación: quién entrega, quién recibe, la patente, y solo si hay
+ * un daño, qué daño y sus fotos. Sin daño no se pide nada más: el acta dice
+ * que se recibió sin daños a la vista y eso es lo que firma quien la recibe.
+ *
+ * Las fotos se suben ANTES de escribir el acta y el SHA-256 de cada una va
+ * impreso en el texto. Así la firma cubre también las fotos: si alguien
+ * reemplazara una en la carpeta, ya no calzaría con lo firmado.
+ */
+const MAX_FOTOS_VEHICULO = 6;
+
+/** «ab-cd 12» → «ABCD12». null si no parece una patente. */
+export function patenteLimpia(v) {
+  const p = String(v ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  return /^[A-Z0-9]{4,8}$/.test(p) ? p : null;
+}
+
+/** BBBB12 → BB·BB·12, que es como se lee en la placa. */
+export function patenteLinda(p) {
+  const t = String(p || '');
+  if (/^[A-Z]{4}\d{2}$/.test(t) || /^[A-Z]{2}\d{4}$/.test(t)) {
+    return `${t.slice(0, 2)}·${t.slice(2, 4)}·${t.slice(4)}`;
+  }
+  return t;
+}
+
+function cuerpoVehiculo({ emp, instalacion, cuando, patente, entrega, recibe, danos, fotos }) {
+  const l = [];
+  l.push(encabezado(emp));
+  l.push('');
+  l.push('ACTA DE CAMBIO DE VEHÍCULO');
+  l.push('');
+  l.push(`Instalación: ${instalacion}`);
+  l.push(`Fecha: ${fechaLarga(cuando)}, a las ${horaChile(cuando)} horas.`);
+  l.push(`Vehículo: patente ${patenteLinda(patente)}`);
+  l.push('');
+  l.push('En la fecha y hora indicadas se deja constancia de la entrega del vehículo ' +
+         'individualizado, entre las personas que suscriben:');
+  l.push('');
+  l.push(`ENTREGA:  ${entrega.nombre}${entrega.rut ? `, RUN ${formatearRut(entrega.rut)}` : ''}`);
+  l.push(`RECIBE:   ${recibe.nombre}${recibe.rut ? `, RUN ${formatearRut(recibe.rut)}` : ''}`);
+  l.push('');
+  l.push('ESTADO DEL VEHÍCULO AL MOMENTO DE LA ENTREGA');
+  l.push('');
+  if (danos) {
+    l.push('  Presenta los siguientes daños u observaciones:');
+    l.push('  ' + danos.split('\n').map((x) => x.trim()).join('\n  '));
+    l.push('');
+    l.push(fotos.length
+      ? `  Se adjuntan ${fotos.length} fotografía${fotos.length === 1 ? '' : 's'}, ` +
+        'identificadas por su huella digital (SHA-256):'
+      : '  No se adjuntaron fotografías.');
+    fotos.forEach((f, i) => l.push(`    ${i + 1}. ${f.sha256}`));
+  } else {
+    l.push('  Sin daños a la vista.');
+  }
+  l.push('');
+  l.push('Quien entrega declara haber entregado el vehículo en las condiciones ' +
+         'descritas, y quien recibe declara recibirlo conforme.');
+  l.push('');
+  l.push(LEY);
+  if (emp.por_confirmar.includes('razon_social')) {
+    l.push('');
+    l.push('Nota: la razón social con que se emite este documento está pendiente ' +
+           'de confirmación por la gerencia.');
+  }
+  return l.join('\n');
+}
+
+export async function crearCambioVehiculo(env, cuerpo, quien) {
+  const instalacionId = Number(cuerpo.instalacion_id);
+  const instalacion = Number.isInteger(instalacionId) && instalacionId > 0
+    ? await primero(env, `instalaciones?select=id,nombre&id=eq.${instalacionId}`) : null;
+  if (!instalacion) return { error: 'Elija la instalación', status: 400 };
+
+  const patente = patenteLimpia(cuerpo.patente);
+  if (!patente) return { error: 'Escriba la patente del vehículo (por ejemplo, ABCD12)', status: 400 };
+
+  const entrega = await parteDelTurno(env, cuerpo.entrega_trabajador_id, cuerpo.entrega_nombre, 'entrega el vehículo');
+  if (entrega.error) return entrega;
+  const recibe = await parteDelTurno(env, cuerpo.recibe_trabajador_id, cuerpo.recibe_nombre, 'recibe el vehículo');
+  if (recibe.error) return recibe;
+  if (entrega.id && recibe.id && entrega.id === recibe.id) {
+    return { error: 'La misma persona no puede entregar y recibir el vehículo', status: 400 };
+  }
+
+  const conDanos = cuerpo.con_danos === true || cuerpo.con_danos === 'true';
+  const danos = conDanos ? String(cuerpo.danos ?? '').trim().slice(0, 2000) : '';
+  if (conDanos && danos.length < 5) {
+    return { error: 'Describa el daño: dónde está y cómo es', status: 400 };
+  }
+
+  // Las fotos: solo con daño, y validadas antes de subir nada.
+  const listaFotos = conDanos && Array.isArray(cuerpo.fotos) ? cuerpo.fotos : [];
+  if (listaFotos.length > MAX_FOTOS_VEHICULO) {
+    return { error: `Máximo ${MAX_FOTOS_VEHICULO} fotos por cambio de vehículo`, status: 400 };
+  }
+  const fotos = [];
+  for (const f of listaFotos) {
+    const b = bytesDeFoto(f && f.foto);
+    if (!b) return { error: 'Una de las fotos no es una imagen JPEG válida', status: 400 };
+    if (b.demasiado) return { error: 'Una de las fotos pesa demasiado (máximo 1,5 MB)', status: 413 };
+    fotos.push({ bytes: b.bytes, sha256: await hashBytes(b.bytes),
+                 lat: numeroONulo(f.lat, -90, 90), lon: numeroONulo(f.lon, -180, 180),
+                 exactitud_m: numeroONulo(f.exactitud_m, 0, 100000) });
+  }
+
+  const ahora = new Date();
+  const carpeta = `vehiculos/${fechaChile(ahora)}/${crypto.randomUUID()}`;
+  for (const [i, f] of fotos.entries()) {
+    f.ruta = `${carpeta}/${i + 1}.jpg`;
+    try {
+      await subirFoto(env, CARPETA_NOVEDADES, f.ruta, f.bytes);
+    } catch (e) {
+      console.error('No se pudo subir la foto del vehículo:', e.message);
+      return { error: 'No se pudieron guardar las fotos. Intente de nuevo; el acta no se emitió.', status: 502 };
+    }
+  }
+
+  const emp = await datosEmpresa(env);
+  const texto = cuerpoVehiculo({ emp, instalacion: instalacion.nombre, cuando: ahora,
+    patente, entrega, recibe, danos: conDanos ? danos : null, fotos });
+
+  const fila = await insertarConNumero(env, 'cambios_vehiculo', 'CV', async (numero) => ({
+    numero,
+    instalacion_id: instalacion.id,
+    instalacion_nombre: instalacion.nombre,
+    cuando: ahora.toISOString(),
+    fecha: fechaChile(ahora),
+    patente,
+    entrega_trabajador_id: entrega.id,
+    entrega_nombre: entrega.nombre,
+    entrega_rut: entrega.rut,
+    recibe_trabajador_id: recibe.id,
+    recibe_nombre: recibe.nombre,
+    recibe_rut: recibe.rut,
+    con_danos: conDanos,
+    danos: conDanos ? danos : null,
+    cuerpo: texto,
+    cuerpo_hash: await hash(texto),
+    creado_por: quien.usuario,
+  }));
+
+  if (fotos.length) {
+    await insertar(env, 'fotos_vehiculo', fotos.map((f, i) => ({
+      cambio_id: fila.id, orden: i + 1, ruta: f.ruta, bytes: f.bytes.length, sha256: f.sha256,
+      lat: f.lat, lon: f.lon, exactitud_m: f.exactitud_m == null ? null : Math.round(f.exactitud_m),
+    })));
+  }
+
+  await anotar(env, quien.usuario, 'cambio_vehiculo', fila.id, 'emitió un acta de cambio de vehículo',
+    `${fila.numero} · ${instalacion.nombre} · ${patente} · entrega ${entrega.nombre}, recibe ${recibe.nombre}` +
+    (conDanos ? ` · con daños (${fotos.length} foto${fotos.length === 1 ? '' : 's'})` : ''));
+
+  return { cambio: { ...fila, firmas: [], fotos: fotos.length }, por_confirmar: emp.por_confirmar };
+}
+
+async function hashBytes(bytes) {
+  const r = await crypto.subtle.digest('SHA-256', bytes);
+  return [...new Uint8Array(r)].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+/** Una foto de un cambio de vehículo, entregada desde este mismo dominio. */
+export async function fotoVehiculo(env, id, orden) {
+  const f = await primero(env,
+    `fotos_vehiculo?select=ruta&cambio_id=eq.${Number(id)}&orden=eq.${Number(orden)}`);
+  if (!f) return { error: 'Foto no encontrada', status: 404 };
+  const r = await leerFoto(env, CARPETA_NOVEDADES, f.ruta);
+  if (!r) return { error: 'La foto no está en la carpeta', status: 404 };
+  return {
+    respuesta: new Response(r.body, {
+      headers: {
+        'content-type': 'image/jpeg',
+        'cache-control': 'private, max-age=3600',
+        'x-content-type-options': 'nosniff',
+      },
+    }),
+  };
+}
+
+/** Las patentes usadas antes en la instalación, para sugerirlas en el formulario. */
+export async function patentesDe(env, instalacionId) {
+  const n = Number(instalacionId);
+  if (!Number.isInteger(n) || n <= 0) return [];
+  const filas = await buscar(env,
+    `cambios_vehiculo?select=patente&instalacion_id=eq.${n}&order=cuando.desc&limit=200`);
+  return [...new Set(filas.map((f) => f.patente))].slice(0, 30);
+}
+
 // ================================================================== firmar
 const ROLES = {
   cambio_turno: { sale: 'Quien se retira', entra: 'Quien ingresa' },
   evento: { autor: 'Quien informa', testigo: 'Testigo' },
+  cambio_vehiculo: { entrega: 'Quien entrega', recibe: 'Quien recibe' },
 };
 
-const TABLA = { cambio_turno: 'cambios_turno', evento: 'eventos_especiales' };
-const VISTA = { cambio_turno: 'v_cambios_turno', evento: 'v_eventos' };
+const TABLA = { cambio_turno: 'cambios_turno', evento: 'eventos_especiales',
+                cambio_vehiculo: 'cambios_vehiculo' };
+const VISTA = { cambio_turno: 'v_cambios_turno', evento: 'v_eventos',
+                cambio_vehiculo: 'v_cambios_vehiculo' };
+/** Las firmas sin las que el acta no queda «firmada». */
+const OBLIGATORIAS = { cambio_turno: ['sale', 'entra'], evento: ['autor'],
+                       cambio_vehiculo: ['entrega', 'recibe'] };
 
 /**
  * Pega una firma.
@@ -555,7 +754,7 @@ export async function firmar(env, entidad, id, cuerpo, quien, request) {
   // El acta queda firmada cuando están todas las firmas que pide.
   const firmas = await buscar(env,
     `firmas_acceso?select=rol&entidad=eq.${entidad}&entidad_id=eq.${acta.id}`);
-  const obligatorias = entidad === 'cambio_turno' ? ['sale', 'entra'] : ['autor'];
+  const obligatorias = OBLIGATORIAS[entidad];
   const completo = obligatorias.every((r) => firmas.some((f) => f.rol === r));
   let estado = acta.estado;
   if (completo && acta.estado !== 'firmado') {
@@ -582,6 +781,12 @@ function nombreDelActa(entidad, rol, acta) {
   }
   if (entidad === 'cambio_turno' && rol === 'entra') {
     return { nombre: acta.entra_nombre, rut: acta.entra_rut };
+  }
+  if (entidad === 'cambio_vehiculo' && rol === 'entrega') {
+    return { nombre: acta.entrega_nombre, rut: acta.entrega_rut };
+  }
+  if (entidad === 'cambio_vehiculo' && rol === 'recibe') {
+    return { nombre: acta.recibe_nombre, rut: acta.recibe_rut };
   }
   if (entidad === 'evento' && rol === 'autor') {
     return { nombre: acta.creado_por_nombre, rut: null };
@@ -636,16 +841,27 @@ export async function listarActas(env, entidad, p) {
   if (desde) filtros.push(`fecha=gte.${desde}`);
   if (hasta) filtros.push(`fecha=lte.${hasta}`);
 
+  if (entidad === 'cambio_vehiculo') {
+    const pat = patenteLimpia(p.get('patente'));
+    if (pat) filtros.push(`patente=eq.${pat}`);
+    if (p.get('danos') === 'si') filtros.push('con_danos=is.true');
+  }
+
   const tope = Math.min(Math.max(Number(p.get('tope')) || 100, 1), 500);
   // La vista trae el cuerpo entero de cada acta, que son miles de caracteres.
   // El listado no lo necesita y pedirlo haría que abrir la pestaña bajara
   // cientos de kilobytes por la red del parque.
-  const columnas = entidad === 'cambio_turno'
-    ? 'id,numero,instalacion_id,instalacion_nombre,cuando,fecha,sale_nombre,entra_nombre,estado,anulado_motivo,firmas,firmas_descuadradas,creado_por'
-    : 'id,numero,instalacion_id,instalacion_nombre,tipo,ocurrido_en,fecha,lugar,policia,estado,anulado_motivo,firmas,firmas_descuadradas,creado_por,creado_por_nombre';
+  const columnas = {
+    cambio_turno: 'id,numero,instalacion_id,instalacion_nombre,cuando,fecha,sale_nombre,entra_nombre,estado,anulado_motivo,firmas,firmas_descuadradas,creado_por',
+    evento: 'id,numero,instalacion_id,instalacion_nombre,tipo,ocurrido_en,fecha,lugar,policia,estado,anulado_motivo,firmas,firmas_descuadradas,creado_por,creado_por_nombre',
+    cambio_vehiculo: 'id,numero,instalacion_id,instalacion_nombre,cuando,fecha,patente,entrega_nombre,recibe_nombre,con_danos,danos,fotos,estado,anulado_motivo,firmas,firmas_descuadradas,creado_por',
+  }[entidad];
 
   const filas = await buscar(env,
     `${VISTA[entidad]}?select=${columnas}&${filtros.join('&')}&order=id.desc&limit=${tope}`);
+  if (entidad === 'cambio_vehiculo') {
+    return { cambios: filas, patentes: inst > 0 ? await patentesDe(env, inst) : [] };
+  }
   return { [entidad === 'cambio_turno' ? 'certificados' : 'eventos']: filas };
 }
 
@@ -658,9 +874,13 @@ export async function verActa(env, entidad, id) {
   const firmas = await buscar(env,
     `firmas_acceso?select=*&entidad=eq.${entidad}&entidad_id=eq.${acta.id}&order=firmado_en.asc`);
 
-  const obligatorias = entidad === 'cambio_turno' ? ['sale', 'entra'] : ['autor'];
+  const obligatorias = OBLIGATORIAS[entidad];
+  const fotos = entidad === 'cambio_vehiculo'
+    ? await buscar(env, `fotos_vehiculo?select=orden,sha256,lat,lon,exactitud_m&cambio_id=eq.${acta.id}&order=orden.asc`)
+    : [];
   return {
     documento: acta,
+    fotos,
     firmas: firmas.map((f) => ({ ...f, rol_nombre: ROLES[entidad][f.rol] || f.rol })),
     roles: ROLES[entidad],
     faltan: obligatorias.filter((r) => !firmas.some((f) => f.rol === r)),
