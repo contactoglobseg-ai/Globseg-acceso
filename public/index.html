@@ -1789,7 +1789,7 @@ async function abrirFormularioVehiculo() {
     if (!trabajadores.length) trabajadores = (await pedir("/trabajadores")).trabajadores;
   } catch (_) { /* se escriben a mano */ }
   const opciones = (sel) => `
-    <option value="">— escribir el nombre a mano —</option>
+    <option value="">— elija de la lista —</option>
     ${trabajadores.map((t) => `<option value="${t.id}" ${String(t.id) === String(sel) ? "selected" : ""}>
       ${esc(t.nombre)}</option>`).join("")}`;
   // Quien tiene el teléfono es, casi siempre, el que recibe la camioneta.
@@ -1806,14 +1806,10 @@ async function abrirFormularioVehiculo() {
       <datalist id="ve-patentes">${vePatentes.map((p) => `<option value="${esc(p)}">`).join("")}</datalist>
 
       <label for="ve-entrega">¿Quién entrega la camioneta?</label>
-      <select id="ve-entrega">${opciones(null)}</select>
-      <input id="ve-entrega-nombre" placeholder="Nombre de quien entrega"
-             style="margin-top:.4rem" autocapitalize="words">
+      <select id="ve-entrega" required>${opciones(null)}</select>
 
       <label for="ve-recibe">¿Quién la recibe?</label>
-      <select id="ve-recibe">${opciones(yoId)}</select>
-      <input id="ve-recibe-nombre" placeholder="Nombre de quien recibe"
-             style="margin-top:.4rem" autocapitalize="words">
+      <select id="ve-recibe" required>${opciones(yoId)}</select>
 
       <span class="titulito" style="margin-top:1rem">¿Tiene algún daño?</span>
       <div class="fila" style="gap:.5rem">
@@ -1838,13 +1834,6 @@ async function abrirFormularioVehiculo() {
     </form>
   `, () => {
     $("#b-cancelar-ve").onclick = cerrarCajon;
-    const amarrar = (sel, campo) => {
-      const s = $(sel), i = $(campo);
-      const ver = () => { i.hidden = !!s.value; i.required = !s.value; };
-      s.onchange = ver; ver();
-    };
-    amarrar("#ve-entrega", "#ve-entrega-nombre");
-    amarrar("#ve-recibe", "#ve-recibe-nombre");
     $("#ve-patente").onblur = (ev) => { ev.target.value = patenteLimpia(ev.target.value); };
 
     const conDano = () => (document.querySelector('input[name="ve-dano"]:checked') || {}).value === "si";
@@ -1886,10 +1875,8 @@ async function abrirFormularioVehiculo() {
             cuerpo: {
               instalacion_id: ESTADO.instalacion,
               patente,
-              entrega_trabajador_id: $("#ve-entrega").value || undefined,
-              entrega_nombre: $("#ve-entrega-nombre").value,
-              recibe_trabajador_id: $("#ve-recibe").value || undefined,
-              recibe_nombre: $("#ve-recibe-nombre").value,
+              entrega_trabajador_id: $("#ve-entrega").value,
+              recibe_trabajador_id: $("#ve-recibe").value,
               con_danos: conDano(),
               danos: conDano() ? $("#ve-danos").value : "",
               fotos: conDano() ? veFotos : [],
