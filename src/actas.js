@@ -528,7 +528,8 @@ function cuerpoVehiculo({ emp, instalacion, cuando, patente, entrega, recibe, da
       : '  No se adjuntaron fotografías.');
     fotos.forEach((f, i) => l.push(`    ${i + 1}. ${f.sha256}`));
   } else {
-    l.push('  Sin daños a la vista.');
+    l.push('  Sin daños a la vista. Quien recibe declara haber revisado el vehículo');
+    l.push('  y no haber observado daños.');
   }
   l.push('');
   l.push('Quien entrega declara haber entregado el vehículo en las condiciones ' +
