@@ -1784,10 +1784,14 @@ async function refrescarVehiculos() {
 
 async function abrirFormularioVehiculo() {
   let trabajadores = [];
+  // La camioneta la manejan los guardias: la gerencia, la oficina y
+  // prevención están cargados como trabajadores por los sueldos, pero no
+  // salen en esta lista.
+  const soloGuardias = (lista) => lista.filter((t) => t.cargo === "guardia");
   try {
-    trabajadores = (await pedir(`/trabajadores?instalacion=${ESTADO.instalacion}`)).trabajadores;
-    if (!trabajadores.length) trabajadores = (await pedir("/trabajadores")).trabajadores;
-  } catch (_) { /* se escriben a mano */ }
+    trabajadores = soloGuardias((await pedir(`/trabajadores?instalacion=${ESTADO.instalacion}`)).trabajadores);
+    if (!trabajadores.length) trabajadores = soloGuardias((await pedir("/trabajadores")).trabajadores);
+  } catch (_) { /* sin lista no se puede emitir: el formulario lo dice */ }
   const opciones = (sel) => `
     <option value="">— elija de la lista —</option>
     ${trabajadores.map((t) => `<option value="${t.id}" ${String(t.id) === String(sel) ? "selected" : ""}>

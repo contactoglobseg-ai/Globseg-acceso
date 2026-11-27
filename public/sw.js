@@ -11,7 +11,7 @@
  * Al cambiar cualquier archivo de public/, subir VERSION: los teléfonos bajan
  * la versión nueva en la siguiente apertura con señal.
  */
-const VERSION = 'acceso-v8';
+const VERSION = 'acceso-v9';
 const PANTALLA = [
   '/', '/apariencia.css', '/acceso.css', '/apariencia.js', '/firma.js',
   '/logo.png', '/manifest.json',
